@@ -805,186 +805,481 @@ proc sceneTest(rnd: var Rand): HittablesList =
   #result.add ball0
   #result.add ball2
 
+proc calcHeight(radius, angle: float): float =
+  ## Computes the total height of a cone with `angle` and opening `radius`.
+  result = radius / tan(angle.degToRad)
+
 from sequtils import mapIt
-proc sceneLLNL(): HittablesList =
-  result = initHittables(0)
+from std/stats import mean
 
-  let
-    allR1 = @[63.006, 65.606, 68.305, 71.105, 74.011, 77.027, 80.157,
-             83.405, 86.775, 90.272, 93.902, 97.668, 101.576, 105.632]
-    allXsep = @[4.171, 4.140, 4.221, 4.190, 4.228, 4.245, 4.288, 4.284,
-               4.306, 4.324, 4.373, 4.387, 4.403, 4.481]
-    allAngles = @[0.579, 0.603, 0.628, 0.654, 0.680, 0.708, 0.737, 0.767,
-                 0.798, 0.830, 0.863, 0.898, 0.933, 0.970]
-    lMirror = 225.0
+import sensorBuf, telescopes
 
-
-  proc calcHeight(radius, angle: float): float =
-    result = radius / tan(angle.degToRad)
-
+proc earth(): Hittable =
+  ## Adds the Earth as a ground. It's only 6.371 km large here :) Why? Who knows.
   let groundMaterial = initMaterial(initLambertian(color(0.2, 0.7, 0.2)))
-  let EarthR = 6_371_000.0
+  const EarthR = 6_371_000.0 # Meter, not MilliMeter, but we keep it...
+  result = translate(point(0, -EarthR - 5000, 0), Sphere(radius: EarthR, mat: groundMaterial))
+
+type
+  SourceKind = enum
+    skSun, skXrayFinger, skParallelXrayFinger
+
+import fluxCdf
+proc sun(solarModelFile: string): Hittable =
+  ## Adds the Sun
+  let sunColor = color(1.0, 1.0, 0.5)
+  let sunMaterial = if solarModelFile.len == 0:
+                      initMaterial(initDiffuseLight(sunColor))
+                    else:
+                      initMaterial(
+                        initSolarEmission(sunColor,
+                                          getFluxRadiusCDF(solarModelFile)
+                        )
+                      )
+
+  const AU = 149_597_870_700_000.0 # by definition since 2012
+  var SunR = 696_342_000_000.0 # Solar radius SOHO 2003 & 2006
+  if solarModelFile.len == 0:
+    ## DTU PhD mentions 3 arcmin source. tan(3' / 2) * 1 AU = 0.0937389
+    SunR *= 0.0937389 #0.20 # only inner 20% contribute, i.e. make the sphere smaller for diffuse light
+  ## XXX: in principle need to apply correct x AU distance here if `solarModelFile` supplied!
+  result = translate(point(0, 0, AU), Sphere(radius: SunR, mat: sunMaterial))
+
+proc xrayFinger(tel: Telescope, magnet: Magnet, magnetPos: float, kind: SourceKind): Hittable =
+  ## Adds an X-ray finger
+  ## Define the X-ray source
+  case kind
+  of skParallelXrayFinger:
+    let sunMaterial = initMaterial(initLaser(color(1.0, 1.0, 0.5)))
+    result = translate(point(0, 0, magnetPos + 9.26 * 1000.0), Disk(distance: 0.0, radius: magnet.radius, mat: sunMaterial))
+    #result = translate(point(0, 0, magnetPos + 9.26 * 1000.0 + 100_000.0), Disk(distance: 0.0, radius: magnet.radius, mat: sunMaterial))
+  of skXrayFinger: # classical emission allowing all angles
+    ## X-ray finger as mentioned in the PhD thesis of A. Jakobsen (14.2 m distance, 3 mm radius)
+    let sunMaterial = initMaterial(initDiffuseLight(color(1.0, 1.0, 0.5)))
+    result = translate(point(0, 0, magnetPos + 14.2 * 1000.0), Disk(distance: 0.0, radius: 3.0, mat: sunMaterial))
+    ## X-ray finger as mentioned in CAST Nature paper ~12 m distance
+    #result = translate(point(0, 0, magnetPos + 12.0 * 1000.0), Disk(distance: 0.0, radius: 3.0, mat: sunMaterial))
+  else: doAssert false, "Invalid branch, not an X-ray finger."
+
+proc source(tel: Telescope, magnet: Magnet, magnetPos: float, sourceKind: SourceKind,
+            solarModelFile: string): Hittable =
+  case sourceKind
+  of skSun: result = sun(solarModelFile)
+  of skXrayFinger, skParallelXrayFinger: result = xrayFinger(tel, magnet, magnetPos, sourceKind)
+
+proc target(tel: Telescope, magnet: Magnet,
+            visibleTarget: bool): Hittable =
+  ## Construct a target for the light source. We want to sample towards the end of the magnet
+  ## (the side towards the telescope)
+  let z = tel.length() ## Position of telescope end on magnet side
+  let pink = color(1.0, 0.05, 0.9)
+  result = toHittable(Disk(distance: 0.0, radius: magnet.radius, mat: toMaterial(initLightTarget(pink, visibleTarget))))
+    .translate(vec3(0.0, 0.0, z + magnet.length))
+
+proc lightSource(tel: Telescope, magnet: Magnet,
+                 magnetPos: float,
+                 sourceKind: SourceKind,
+                 visibleTarget: bool,
+                 solarModelFile: string
+                ): HittablesList =
+  ## Constructs a light source as well as the optional target if needed.
+  result = initHittables()
+  result.add source(tel, magnet, magnetPos, sourceKind, solarModelFile)
+  if sourceKind != skParallelXrayFinger:
+    result.add target(tel, magnet, visibleTarget)
+
+proc magnetBore(magnet: Magnet, magnetPos: float): Hittable =
+  let cylMetal = initMaterial(initMetal(color(0.2, 0.2, 0.6), 0.8))
+  # The bore is a full cylinder made of metal, slight blue tint
+  result = Cylinder(radius: magnet.radius, zMin: 0.0, zMax: magnet.length, phiMax: 360.0.degToRad, mat: cylMetal)
+    .translate(vec3(0.0, 0.0, magnetPos))
+
+proc imageSensor(tel: Telescope, magnet: Magnet,
+                 fullTelescope: bool,
+                 pixelsW = 400, pixelsH = 400,
+                 sensorW = 14.0, sensorH = 14.0,
+                           sensorThickness = 0.1,
+                           rayAt = 1.0
+                ): Hittable =
+  ## This is the correct offset for the focal spot position! It's the center of the cones for the telescope.
+  ## XXX: Sanity check:
+  ## -> Check all mirrors we install have the exact same position as an offset!!!
+  let
+    r1_0 = tel.allR1[0]
+    α0 = tel.allAngles[0].degToRad
+    lMirror = tel.lMirror
+    xSep = tel.xSep
+  ## The focal point is at the z axis that defines the cones of the telescope.
+  ## - y = 0 is the center of the bore.
+  ## - Radius 1 is the radius of the cones on the magnet side. In theory it is
+  ##   the offset to the focal point.
+  ## - ``center`` of first lowest mirror aligns with bottom of bore. Hence `sin(α0) * lMirror / 2`
+  ## For the full telescope it's simply on the z axis, as our bore radius center as well as
+  ## cone centers are there.
+  let yOffset = if fullTelescope: 0.0
+                else: (r1_0 - sin(α0) * lMirror / 2.0) + magnet.radius
+  echo "Offset should be: ", yOffset
+  echo "Corresponds to angle = ", arctan(yOffset / (1500 + xSep / 2 + lMirror / 2)).radToDeg, " from front mirror!"
+  #let yOffset
+  echo "Corresponds to angle = ", arctan((yOffset + magnet.radius) / 1500).radToDeg
+  # calc angle
+  let telCenter = lMirror + xSep / 2 # focal point defined from ``center`` of telescope!
+  ## NOTE: expected offset is about -83 mm from telescope center.
+
+  let p = point(0, 0, telCenter)
+  var target = point(0.0, -yOffset, - tel.focalLength + telCenter) #point(-0.5, 3, -0.5)#point(3,3,2)
+
+  let ray = initRay(p, target - p, rtCamera)
+  # move a bit
+  echo "Old target: ", target
+  target = ray.at(rayAt)
+  echo "New target: ", target
+
+  let imSensor = toMaterial(initImageSensor(400, 400))
+  #let screen = initBox(point(-200, -200, -0.1), point(200, 200, 0.1), imSensor)
+  #let screen = initBox(point(-10, -10, -0.1), point(10, 10, 0.1), imSensor)
+  result = initBox(point(-sensorW/2, -sensorH/2, -sensorThickness/2),
+                   point( sensorW/2,  sensorH/2,  sensorThickness/2),
+                   imSensor) # we sink ot so that the box becomes the memory owner of the buffer
+                                  # otherwise `imSensor` goes out of scope and frees buffer!
+    .translate(target)
+
+proc gridLines(tel: Telescope, magnet: Magnet): HittablesList =
+  ## Some helper "grid" lines indicating zero x,y along z as well as center of each mirror
+  result = initHittables()
+  let cylMetal = initMaterial(initMetal(color(0.2, 0.2, 0.6), 0.8))
+  let zLine = Cylinder(radius: 0.05, zMin: -100.0, zMax: magnet.length, phiMax: 360.0.degToRad, mat: cylMetal)
+    .translate(vec3(0.0, -magnet.radius, 0.0)) # 5.0 for xSep + a bit
+    #.translate(vec3(0.0, 0.0, 0.0)) # 5.0 for xSep + a bit
+  result.add zLine
+
+  ## XXX: this is slightly wrong due to xSep!
+  let lMirror = tel.lMirror
+  let z0 = tel.lMirror + tel.xSep + tel.lMirror / 2
+  let xLine = Cylinder(radius: 0.5, zMin: -100.0, zMax: 100, phiMax: 360.0.degToRad, mat: cylMetal)
+    .translate(vec3(0.0, -magnet.radius, 0.0))
+    .rotateY(90.0)
+    .translate(vec3(0.0, 0.0, z0))
+  result.add xLine
+
+  let z1 = lMirror / 2
+  let xLine2 = Cylinder(radius: 0.5, zMin: -100.0, zMax: 100, phiMax: 360.0.degToRad, mat: cylMetal)
+    .translate(vec3(0.0, -magnet.radius, 0.0))
+    .rotateY(90.0)
+    .translate(vec3(0.0, 0.0, z1))
+  result.add xLine2
+
+proc calcYlYsep(angle, xSep, lMirror: float): (float, float, float) =
+  ## Helper to compute displacement of each set of mirrors and the y distance
+  ## given by the angles due to mirror rotation
+  let ySep = tan(angle.degToRad) * (xSep / 2.0) + tan(angle.degToRad * 3) * (xSep / 2.0)
+  let yL1  = sin(angle.degToRad) * lMirror
+  let yL2  = sin(3 * angle.degToRad) * lMirror
+  result = (ySep, yL1, yL2)
+
+proc graphiteSpacer(tel: Telescope, magnet: Magnet, fullTelescope: bool): HittablesList =
+  ## The graphite spacer in the middle
+  result = initHittables()
+  let
+    lMirror = tel.lMirror
+    xSep = tel.xSep
+    graphite = initMaterial(initLambertian(color(0.2, 0.2, 0.2)))
+    excessSize = 5.0
+    α0 = tel.allAngles[0]
+    (ySep, yL1, yL2) = calcYlYsep(α0, xSep, lMirror)
+    meanAngle = tel.allAngles.mean
+  let gSpacer = initBox(point(0, 0, 0), point(2, 2 * magnet.radius + excessSize, lMirror), graphite)
+    .translate(vec3(-1.0, -magnet.radius - excessSize / 2, -lMirror / 2))
+  let gSpacer1 = gSpacer
+    .rotateX(meanAngle)
+    .translate(vec3(0.0, 0.0, lMirror + lMirror / 2 + xSep))
+  let gSpacer2 = gSpacer
+    .rotateX(3 * meanAngle)
+    .translate(vec3(0.0, -(yL1/2 + yL2/2 + ySep), lMirror / 2))
+  result.add gSpacer1
+  result.add gSpacer2
+  if fullTelescope: ## Also add the center blocking disk
+    #let imSensorDisk = toMaterial(initImageSensor(400, 400))
+    #let centerDisk = Disk(distance: 0.0, radius: 500.0, mat: graphite) #imSensorDisk)
+    #let centerDisk = XyRect(x0: -boreRadius, x1: boreRadius, y0: -boreRadius, y1: boreRadius, mat: imSensorDisk)  #Disk(distance: 0.0, radius: 500.0, mat: imSensorDisk)
+    #let centerDisk = initBox(point(-magnet.radius, -magnet.radius, -0.1), point(magnet.radius, magnet.radius, 0.1), imSensorDisk)
+    ## A disk that blocks the inner part where no mirrors cover the bore.
+    let centerDisk = Disk(distance: 0.0, radius: tel.allR1[0] - sin(tel.allAngles[0].degToRad) * tel.lMirror,
+                          mat: graphite)
+      .translate(vec3(0.0, 0.0, lMirror * 2 + xSep))
+    result.add centerDisk
+
+
+proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope, usePerfectMirror: bool): HittablesList =
+  ## Constructs the actual LLNL telescope
+  let
+    lMirror = tel.lMirror
+    xSep = tel.xSep
+  let perfectMirror = initMaterial(initMetal(color(1.0, 0.0, 0.0), 0.0))
+  ## Imperfect value assuming a 'figure error similar to NuSTAR of 1 arcmin'
+  ## -> tan(1 ArcMin) (because fuzz added to unit vector)
+  const ImperfectVal = 0.0002908880082045767 # 0.0005
+  let imperfectMirror = initMaterial(initMetal(color(1.0, 0.0, 0.0), ImperfectVal))
+  echo "USING PERFECT MIRROR?? ", usePerfectMirror
+  let mat = if usePerfectMirror: perfectMirror else: imperfectMirror
+
+  let r1_0 = tel.allR1[0]
+  for i in 0 ..< tel.allR1.len:
+    let
+      r1 = tel.allR1[i]
+      r5 = tel.allR5[i]
+      ## XXX: this makes it "work"!
+      angle = tel.allAngles[i] # * 1.02
+      r4 = r5 + lMirror * sin(3.0 * angle.degToRad)
+    let (ySep, yL1, yL2) = calcYlYsep(angle, xSep, lMirror)
+    ## Pos for the 'first' layers should be correct, under the following two conditions:
+    ## 1. it's not entirely clear what part of the telescope really should align with the bottom edge of the magnet.
+    ##    Currently the center of the front shell is aligned with the bottom.
+    ## 2. it's not clear what part of the shells should align vertically as discussed with Julia and Jaime in Cristinas office.
+    ##    The front? The center? The back? Currently I align at the center.
+    let y11 = (r1 - r1_0) + 0 # 0 because coordinate origin at layer 0 center. So at layer
+                              # i the shell edge towards the magnet is at y11 above 0
+    ## XXX: should this be moved up by another half to align end with magnet bore?
+    let pos = y11 - sin(angle.degToRad) * lMirror/2
+    let pos2 = pos - yL1 / 2.0 - yL2 / 2.0 - ySep
+    echo "r1 = ", r1, " r5 = ", r5, " r5 - r1 = ", r5 - r1, " i = ", i, " pos = ", pos, " pos2 = ", pos2
+    block Sanity:
+      let yCenter = tan(2 * angle.degToRad) * (lMirror + xsep)
+      echo "yCenter value = ", yCenter, " compare to 'working' ", - (yL2) - (yL1) - ySep, " compare 'correct' = ", - (yL2/2) - (yL1/2) - ySep
+
+      let yOffset = (r1 - (sin(angle.degToRad) * lMirror) / 2.0) + magnet.radius - pos
+      echo "Offset for layer ", i, " should be: ", yOffset, " \n==============================\n\n"
+    proc setCone(r, angle, y, z: float, mat: Material): Hittable =
+      ## XXX: merge `yL` with the same subtracted from `pos` above!
+      let yL = (sin(angle.degToRad) * lMirror) / 2.0 # The y displacement from front to center of mirror
+      let height = calcHeight(r, angle) # total height of the cone that yields required radius and angle
+      proc cone(r, h: float): Cone =
+        result = Cone(radius: r, height: h, zMax: lMirror,
+                      phiMax: tel.mirrorSize.degToRad, mat: mat)
+      proc cyl(r, h: float): Cylinder =
+        result = Cylinder(radius: r, zMin: 0.0, zMax: lMirror,
+                          phiMax: tel.mirrorSize.degToRad, mat: mat)
+      let c = cone(r, height)
+      #let c = cyl(r, height) ## To construct a fake telescope
+      echo "Translating down by : ", y
+      # for the regular telescope first move to -r + yL to rotate around center of layer. Full no movement
+
+      let xOffset = if fullTelescope: 0.0 else: -r + yL
+      let yOffset = if fullTelescope: 0.0 else: y - magnet.radius # move down by bore radius & offset
+      var h = c.rotateZ(tel.mirrorSize / 2.0) # rotate out half the miror size to center "top" of mirror
+        .translate(vec3(xOffset, 0.0, -lMirror / 2.0)) # move to its center
+        #.rotateY(angle) ## For a cylinder telescope
+        .rotateX(180.0) # we consider from magnet!
+        .rotateZ(-90.0)
+        .translate(vec3(0.0, yOffset, z + lMirror / 2.0)) # move to its final position
+      result = h
+    let con  = setCone(r1, angle,     pos,  lMirror + xSep, mat)
+    ## NOTE: using `r1` as well reproduces the X-ray finger results from the _old_ raytracer!
+    let con2 = setCone(r4, 3 * angle, pos2, 0.0,            mat)
+    result.add con
+    result.add con2
+
+proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
+               solarModelFile: string,
+               rayAt = 1.0): HittablesList =
+  ## Mirrors centered at lMirror/2.
+  ## Entire telescope
+  ##   lMirror  xsep  lMirror
+  ## |         |----|         | ( Magnet bore       )
+  ##      ^-- center 1
+  ##                     ^-- center 2
+  ## ^-- z = 0
+  ## due to rotation around the *centers* of the mirrors, the real x separation increases.
+  ## `xSep = 4 mm` exactly, `lMirror = 225 mm` and the correct cones are computed based on the
+  ## given angles and the R1, R5 values. R4 is the relevant radius of the cone for the
+  ## second set of mirrors. Therefore R1 and R4 are actually relevant.
+  result = initHittables(0)
+  ## Constants fixed to *this* specific setup
+  const
+    boreRadius = 43.0 / 2 # mm
+    length = 9.26 # m
+    telescopeMagnetZOffset = 1.0 # 1 mm
+    mirrorSize = 30.0 # 30 degree mirrors
+
+  let llnl = initTelescope(tkLLNL, mirrorSize)
+  let magnet = initMagnet(boreRadius, length)
+  let magnetPos = llnl.length + telescopeMagnetZOffset
 
   var objs = initHittables(0)
-  #objs.add translate(point(0, -EarthR - 5, 0), Sphere(radius: EarthR, mat: groundMaterial))
 
-  let sunMaterial = initMaterial(initLambertian(color(1.0, 1.0, 0.5)))
-  let AU = 150_000_000_000_000.0
-  let SunR = 696_342_000_000.0
+  objs.add earth()
+  objs.add lightSource(llnl, magnet, magnetPos, sourceKind, visibleTarget, solarModelFile)
+  objs.add magnetBore(magnet, magnetPos)
+  if gridLines:
+    ## XXX: fix adding `HittablesList` to another!
+    objs.add gridLines(llnl, magnet)
+  objs.add imageSensor(llnl, magnet, fullTelescope = false, rayAt = rayAt)
+  #  .translate(vec3(0.0,+7.0,0.0))
+  var telescope = initHittables()
+  telescope.add graphiteSpacer(llnl, magnet, fullTelescope = false)
+  telescope.add llnlTelescope(llnl, magnet, fullTelescope = false, usePerfectMirror = usePerfectMirror)
+  objs.add telescope
+  #  .rotateZ(90.0 - 12)
+  ### Materials
+  #let redMaterial = initMaterial(initLambertian(color(0.7, 0.1, 0.1)))
+  #let greenMaterial = initMaterial(initLambertian(color(0.1, 0.7, 0.1)))
 
-  objs.add translate(point(0, 0, AU), Sphere(radius: SunR, mat: sunMaterial))
+  ## XXX: BVH node of the telescope is currently broken! Bad shading.
+  #result.add telescope #rnd.initBvhNode(telescope)
+  result.add objs
 
+proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
+                    solarModelFile: string): HittablesList =
+  ## Mirrors centered at lMirror/2.
+  ## Entire telescope
+  ##   lMirror  xsep  lMirror
+  ## |         |----|         | ( Magnet bore       )
+  ##      ^-- center 1
+  ##                     ^-- center 2
+  ## ^-- z = 0
+  ## due to rotation around the *centers* of the mirrors, the real x separation increases.
+  ## `xSep = 4 mm` exactly, `lMirror = 225 mm` and the correct cones are computed based on the
+  ## given angles and the R1, R5 values. R4 is the relevant radius of the cone for the
+  ## second set of mirrors. Therefore R1 and R4 are actually relevant.
+  result = initHittables(0)
+  ## Constants fixed to *this* specific setup
+  const
+    boreRadius = 43.0 / 2 # mm
+    length = 9.26 # m
+    telescopeMagnetZOffset = 1.0 # 1 mm
+    mirrorSize = 30.0 # 30 degree mirrors
 
+  let llnl = initTelescope(tkLLNL, mirrorSize)
+  let magnet = initMagnet(boreRadius, length)
+  let magnetPos = llnl.length + telescopeMagnetZOffset
 
-  let conMetal = initMaterial(initMetal(color(0.9, 0.9, 0.9), 0.2))
+  var objs = initHittables(0)
 
-  let redMaterial = initMaterial(initLambertian(color(0.7, 0.1, 0.1)))
-  let greenMaterial = initMaterial(initLambertian(color(0.1, 0.7, 0.1)))
+  objs.add earth()
+  #objs.add lightSource(llnl, magnet, magnetPos, sourceKind, visibleTarget, solarModelFile)
+  if gridLines:
+    ## XXX: fix adding `HittablesList` to another!
+    objs.add gridLines(llnl, magnet)
+  objs.add imageSensor(llnl, magnet, fullTelescope = true) ## Don't want y displacement, the two bores are rotated by 90°
+                                                           ## so focal spot is on y = 0
 
-  let cylMetal = initMaterial(initMetal(color(0.6, 0.6, 0.6), 0.2))
-  let perfectMirror = initMaterial(initMetal(color(1.0, 1.0, 1.0), 0.0))
-  let boreRadius = 43.0 / 2.0
-  let magnetBore = Cylinder(radius: boreRadius, zMin: 0.0, zMax: 9.26 * 1000.0, phiMax: 360.0.degToRad, mat: cylMetal)
-    .translate(vec3(0.0, 0.0, 2 * lMirror + 5.0)) # 5.0 for xSep + a bit
-  objs.add magnetBore
+  var telMag = initHittables()
 
-  let zLine = Cylinder(radius: 0.05, zMin: -100.0, zMax: 9.26 * 1000.0, phiMax: 360.0.degToRad, mat: cylMetal)
-    .translate(vec3(0.0, -boreRadius, 0.0)) # 5.0 for xSep + a bit
-    #.translate(vec3(0.0, 0.0, 0.0)) # 5.0 for xSep + a bit
-  objs.add zLine
+  case sourceKind
+  of skSun: objs.add sun(solarModelFile) ## Only a single sun in center x/y! Hence add to `objs` so not duplicated
+  of skXrayFinger, skParallelXrayFinger:
+    telMag.add xrayFinger(llnl, magnet, magnetPos, sourceKind)
+  # Need two targets in both source cases
+  telMag.add target(llnl, magnet, visibleTarget)
+  telMag.add magnetBore(magnet, magnetPos)
+  telMag.add graphiteSpacer(llnl, magnet, fullTelescope = false)
+  telMag.add llnlTelescope(llnl, magnet, fullTelescope = false, usePerfectMirror = usePerfectMirror)
 
+  ## XXX: FIX THE -83!
+  objs.add telMag.rotateZ(-90.0)
+    .translate(vec3(-83.0, 0.0, 0.0))
+  objs.add telMag.rotateZ(90.0)
+    .translate(vec3(83.0, 0.0, 0.0))
+  ### Materials
+  #let redMaterial = initMaterial(initLambertian(color(0.7, 0.1, 0.1)))
+  #let greenMaterial = initMaterial(initLambertian(color(0.1, 0.7, 0.1)))
 
-  let r1_0 = allR1[0]
-  let α0 = allAngles[0].degToRad
-  let yL0   = r1_0 - sin(α0) * (lMirror / 2.0)
-  let yL0L2 = r1_0 - sin(α0) * (lMirror + allXSep[0] / 2.0) - sin(α0 * 3) * (lMirror / 2.0 + allXSep[0] / 2.0)  #- sin(α0 * 3) / (lMirror / 2.0)
-
-  let mirrorDiverge = sin(α0 * 3) * (lMirror / 2.0)
-  let addit = sin(α0) * (lMirror / 2.0 + allXSep[0] / 2.0) + sin(α0 * 3) * (allXSep[0] / 2.0)
-  let addit2 = sin(α0) * (lMirror / 2.0 + allXSep[0] / 2.0) + sin(α0 * 3) * (lMirror / 2.0 + allXSep[0] / 2.0)
-
-  #let ySep =  sin(α0) * (allXSep[0] / 2.0) + sin(α0 * 3) * (allXSep[0] / 2.0)
-  #let yL1 = sin(α0) * lMirror
-  #let yL2 = sin(3 * α0) * lMirror
-
-  let diff = abs(yL0 - yL0L2)
-
-  let y0 = cos(3 * α0) * (lMirror + allXSep[0] / 2.0) + cos(α0) * (lMirror / 2.0 + allXSep[0] / 2.0)
-  let xLine = Cylinder(radius: 0.5, zMin: -100.0, zMax: 100, phiMax: 360.0.degToRad, mat: cylMetal)
-    .translate(vec3(0.0, -boreRadius, 0.0)) # 5.0 for xSep + a bit
-    .rotateY(90.0)
-    .translate(vec3(0.0, 0.0, y0))
-  objs.add xLine
-
-  let y1 = cos(3 * α0) * (lMirror / 2.0)
-  let xLine2 = Cylinder(radius: 0.5, zMin: -100.0, zMax: 100, phiMax: 360.0.degToRad, mat: cylMetal)
-    .translate(vec3(0.0, -boreRadius, 0.0)) # 5.0 for xSep + a bit
-    .rotateY(90.0)
-    .translate(vec3(0.0, 0.0, y1))
-  objs.add xLine2
-
-
-  for i in 0 ..< allR1.len:
-    let r1 = allR1[i]
-    let angle = allAngles[i]
-    let
-      beta = allAngles[i].degToRad
-      xSep = allXsep[i]
-      r2 = r1 - lMirror * sin(beta)
-      r3 = r2 - 0.5 * xSep * tan(beta)
-      r4 = r3 - 0.5 * xSep * tan(3.0 * beta)
-      r5 = r4 - lMirror * sin(3.0 * beta)
-    echo "r1 = ", r1, " r5 = ", r5, " r5 - r1 = ", r5 - r1
-    ## XXX: fix sin and cosine of xsep & the distances!!!
-    let ySep =  sin(angle.degToRad) * (xsep / 2.0) + sin(angle.degToRad * 3) * (xsep / 2.0)
-    let yL1 = sin(angle.degToRad) * lMirror
-    let yL2 = sin(3 * angle.degToRad) * lMirror
-    let pos  = r1 - r1_0 #r1_0 # r1_0 #yL0
-    ## XXX: FIX POS2
-    let pos2 = r1 - r1_0 - yL1 / 2.0 - yL2 / 2.0 - ySep  #- 1.5 * addit2 # - addit  #yL0 - (yL0 - yL0L2)#L2 #- 15.0
-    echo "i = ", i, " pos = ", pos, " pos2 = ", pos2, " yL0 = ", yL0, " yL02 = ", yL0L2, " diff = ", diff, " mirrorD = ", mirrorDiverge
-
-    let yCenter = tan(2 * angle.degToRad) * (lMirror + xsep)
-    echo "yCenter value = ", yCenter, " compare to 'working' ", - (yL2) - (yL1) - ySep, " compare 'correct' = ", - (yL2/2) - (yL1/2) - ySep
-    when true:
-      ## XXX: compute the correct 'height' depending on the angle.
-      ## Effectively the upper most mirror must be flush with the magnet bore.
-      proc setCone(r, angle, y, z: float, mat: Material): Hittable =
-
-        let yL = (sin(angle.degToRad) * lMirror) / 2.0
-
-        let height = calcHeight(r, angle)
-        const mirrorSize = 30.0 # degrees
-        proc cone(r, h: float): Cone =
-          result = Cone(radius: r, height: h, zMax: lMirror, # height, # lMirror,
-                        phiMax: mirrorSize.degToRad, mat: mat)
-        proc cyl(r, h: float): Cylinder =
-          result = Cylinder(radius: r, zMin: 0.0, zMax: lMirror, # height, # lMirror,
-                            phiMax: mirrorSize.degToRad, mat: mat)
-        let c = cone(r, height)
-        #let c = cyl(r, height)
-        echo "Translating down by : ", y
-        var h = c.rotateZ(mirrorSize / 2.0) # rotate out half the miror size to center "top" of mirror
-          .translate(vec3(-r + yL, 0.0, -lMirror / 2.0)) # move to its center
-          #.rotateY(angle) # rotate by the angle
-          .rotateX(180.0) # we consider from magnet!
-          .rotateZ(-90.0)
-          .translate(vec3(0.0, y - boreRadius, z + lMirror / 2.0)) # move to its final position
-          #.translate(vec3(0.0, y, 0.0))
-          #.translate(vec3(0.0, -y/2, 0.0))
-          #.translate(vec3(0.0, y/2, 0.0))
-        result = h
-      ## XXX: z is wrong!
-      let con  = setCone(r1, angle,     pos, lMirror + xSep, perfectMirror)#greenMaterial)
-      let con2 = setCone(r4, 3 * angle, pos2, 0.0,           perfectMirror)# redMaterial) #- (yL2) - (yL1) - ySep
-      #let con2 = setCone(r4, 3 * angle, 0.0, 0.0,             redMaterial)
-    elif false:
-      ## XXX: Balls are sometimes cut off too!
-      let con = translate(vec3(0.0, 3.0 + i.float * 0.2, 0.0),
-                          Sphere(radius: allR1[i], mat: redMaterial))
-      let con2 = translate(vec3(0.0, 3.0 + i.float * 0.2, lMirror + xSep),
-                          Sphere(radius: allR1[i], mat: redMaterial))
-    elif false:
-      let con = Sphere(radius: allR1[i], mat: redMaterial)
-      let con2 = Sphere(radius: allR1[i], mat: redMaterial)
-    elif false: ## Sanity check of rotation and selection of mirrors
-      proc setCone(r, angle, angle2, y, z: float, mat: Material): Hittable =
-        let height = calcHeight(r, angle)
-        proc cone(r, h: float): Cone =
-          result = Cone(radius: r, height: h, zMax: lMirror, # height, # lMirror,
-                        phiMax: 30.0.degToRad, mat: mat)
-        let c = cone(r, height)
-        var h = c.rotateZ(15.0)
-          .translate(vec3(-r, 0.0, -lMirror / 2.0)) # move to its center
-          .rotateY(angle2) # rotate by the angle
-          .rotateZ(-90.0)
-          .translate(vec3(r, 0.0, lMirror / 2.0))
-        result = h
-      let con  = setCone(allR1[i], angle, angle, i.float * 0.2, lMirror + xSep, redMaterial)
-      ## XXX: something is broken when setting large angles! Obect only visible from some sides.
-      let con2 = setCone(allR1[i], angle, 45.0, i.float * 0.2, lMirror + xSep, greenMaterial)
+  ## XXX: BVH node of the telescope is currently broken! Bad shading.
+  #result.add telescope #rnd.initBvhNode(telescope)
+  result.add objs
 
 
+proc sceneLLNLFullTelescope(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
+                            solarModelFile: string,
+                            rayAt = 1.0): HittablesList =
+  ## Mirrors centered at lMirror/2.
+  ## Entire telescope
+  ##   lMirror  xsep  lMirror
+  ## |         |----|         | ( Magnet bore       )
+  ##      ^-- center 1
+  ##                     ^-- center 2
+  ## ^-- z = 0
+  ## due to rotation around the *centers* of the mirrors, the real x separation increases.
+  ## `xSep = 4 mm` exactly, `lMirror = 225 mm` and the correct cones are computed based on the
+  ## given angles and the R1, R5 values. R4 is the relevant radius of the cone for the
+  ## second set of mirrors. Therefore R1 and R4 are actually relevant.
+  result = initHittables(0)
+  ## Constants fixed to *this* specific setup
+  const
+    length = 9.26 # m
+    telescopeMagnetZOffset = 1.0 # 1 mm
+    mirrorSize = 360.0 # entire cones for the full telescope
 
-    objs.add con
-    objs.add con2
-  result.add objs #initBvhNode(objs)
+  let llnl = initTelescope(tkLLNL, mirrorSize)
+
+  ## For the full telescope the bore radius is the size of the outer most largest cone
+  let boreRadius = llnl.allR1[^1]
+  let magnet = initMagnet(boreRadius, length)
+  let magnetPos = llnl.length + telescopeMagnetZOffset
+
+  var objs = initHittables(0)
+
+  objs.add earth()
+  objs.add lightSource(llnl, magnet, magnetPos, sourceKind, visibleTarget, solarModelFile)
+  objs.add magnetBore(magnet, magnetPos)
+  if gridLines:
+    ## XXX: fix adding `HittablesList` to another!
+    objs.add gridLines(llnl, magnet)
+  objs.add imageSensor(llnl, magnet, fullTelescope = true, rayAt = rayAt)
+  objs.add graphiteSpacer(llnl, magnet, fullTelescope = true)
+  objs.add llnlTelescope(llnl, magnet, fullTelescope = true, usePerfectMirror = usePerfectMirror)
+
+  ### Materials
+  #let redMaterial = initMaterial(initLambertian(color(0.7, 0.1, 0.1)))
+  #let greenMaterial = initMaterial(initLambertian(color(0.1, 0.7, 0.1)))
+
+  ## XXX: BVH node of the telescope is currently broken! Bad shading.
+  #result.add telescope #rnd.initBvhNode(telescope)
+  result.add objs
+
+
+proc llnlFocalPoint(fullTelescope: bool): (Point, Point) =
+  ## XXX: UPDATE THIS
+  let lMirror = 225.0
+  let α0 = 0.579.degToRad
+  let xSep = 4.0 ## xSep is exactly 4 mm
+  let r1_0 = 63.006
+  let boreRadius = 43.0 / 2
+  let yOffset = if fullTelescope:
+                  0.0
+                else:
+                  (r1_0 - (sin(α0) * lMirror) / 2.0) + boreRadius
+  let zOffset = lMirror + xSep / 2.0
+  let focalDist = 1500.0
+  let lookFrom = point(0.0, -yOffset, - focalDist + zOffset)
+  let lookAt = point(0.0, 0.0, 0.0) # Telescope entrance/exit center is at origin
+  result = (lookFrom, lookAt)
 
 proc main(width = 600,
           maxDepth = 5,
           speed = 1.0,
           speedMul = 1.1,
           llnl = false,
+          llnlTwice = false,
+          fullTelescope = false,
           axisAligned = false,
           focalPoint = false,
           vfov = 90.0,
           numRays = 100,
-          nJobs = 16) =
+          visibleTarget = false,
+          gridLines = false,
+          usePerfectMirror = true,
+          sourceKind = skSun,
+          solarModelFile = "",
+          nJobs = 16,
+          rayAt = 1.0) =
   # Image
   THREADS = nJobs
-  const ratio = 16.0 / 9.0 #16.0 / 9.0
+  #const ratio = 16.0 / 9.0 #16.0 / 9.0
+  const ratio = 1.0
   let img = Image(width: width, height: (width.float / ratio).int)
   let samplesPerPixel = 100
+  var rnd = initRand(0x299792458)
   # World
   ## Looking at mirrors!
   var lookFrom: Point
@@ -995,16 +1290,26 @@ proc main(width = 600,
       lookFrom = point(0.0, 0.0, -100.0) #point(-0.5, 3, -0.5)#point(3,3,2)
       lookAt = point(0.0, 0.0, 0.0) #point(0, 1.5, 2.5)#point(0,0,-1)
     elif focalPoint:
-      let
-        detAngle = 2.75.degToRad
-        focalDist = 1500.0
-      let yAt = tan(detAngle) * focalDist
-      lookFrom = point(0.0, -yAt, -focalDist) #point(-0.5, 3, -0.5)#point(3,3,2)
-      lookAt = point(0.0, 0.0, 0.0) #point(0, 1.5, 2.5)#point(0,0,-1)
+      (lookFrom, lookAt) = llnlFocalPoint(fullTelescope or llnlTwice)
     else:
-      lookFrom = point(172.2886370206074, 58.69754358408407, -14.3630844062124) #point(-0.5, 3, -0.5)#point(3,3,2)
-      lookAt = point(171.4358852563132, 58.70226619735943, -13.84078935031287) #point(0, 1.5, 2.5)#point(0,0,-1)
-    world = sceneLLNL() #mixOfSpheres() #sceneRedBlue() # #sceneCast() #randomScene(useBvh = true, 11) #sceneCast() #randomScene()
+      #lookFrom = point(172.2886370206074, 58.69754358408407, -14.3630844062124) #point(-0.5, 3, -0.5)#point(3,3,2)
+      #lookAt = point(171.4358852563132, 58.70226619735943, -13.84078935031287) #point(0, 1.5, 2.5)#point(0,0,-1)
+      #lookFrom = point(-1262.787318591972, 33.30606935408561, -338.5357032373016)
+      #lookAt = point(-1262.004708698569, 33.22914198500523, -339.1534442304647)
+
+      #lookAt = point(-1262.761916124543, 33.31906554264295, -337.536110413332)
+      #lookFrom = point(-1262.787318591972, 33.30606935408561, -338.5357032373016)
+
+      lookAt = point(-41.23722667383358, -77.42138803689321, -1253.03504313943)
+      lookFrom = point(-42.12957189166389, -77.3883974697615, -1252.584896902418)
+
+    if fullTelescope:
+      world = rnd.sceneLLNLFullTelescope(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile, rayAt)
+    elif llnlTwice:
+      world = rnd.sceneLLNLTwice(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile)
+    else:
+      echo "Visible target? ", visibleTarget
+      world = rnd.sceneLLNL(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile, rayAt)
   else:
     world = rnd.sceneTest()
     lookFrom = point(-1, 5.0, -4) #point(-0.5, 3, -0.5)#point(3,3,2)
