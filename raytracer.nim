@@ -222,7 +222,6 @@ proc renderSdl*(img: Image, world: var HittablesList,
   ## XXX: IMPLEMENT change of vertical field of view using mouse wheel! sort of a zoom
 
   var lastLookFrom: Point
-  proc `==`(p1, p2: Point): bool = result = p1.x == p2.x and p1.y == p2.y and p1.z == p2.z
 
   when compileOption("threads"):
     let numPer = (img.width * img.height) div THREADS
