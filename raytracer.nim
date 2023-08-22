@@ -390,6 +390,17 @@ proc updateCamera(ctxs: var seq[RenderContext], camera: Camera) =
   for ctx in mitems(ctxs):
     ctx.camera = clone(camera)
 
+proc writeData[T](p: ptr UncheckedArray[T], len, width, height: int, outpath, prefix: string) =
+  ## XXX: TODO use `nio`?
+  let filename = &"{outpath}/{prefix}_type_{$T}_len_{len}_width_{width}_height_{height}.dat"
+  echo "[INFO] Writing file: ", filename
+  writeFile(filename, toOpenArray(cast[ptr UncheckedArray[byte]](p), 0, len * sizeof(T)))
+
+from std / times import now, `$`
+
+import ggplotnim except Point, Color, colortypes, color
+
+
 proc renderSdl*(img: Image, world: var HittablesList,
                 rnd: var Rand, # the *main thread* RNG
                 camera: Camera,
@@ -518,6 +529,32 @@ proc renderSdl*(img: Image, world: var HittablesList,
             mouseModeIsRelative = false
             mouseEnabled = false
             echo "[INFO] Mouse disabled."
+        of SDL_SCANCODE_F5:
+          ## Save the current data on the image sensor as well as the current camera buffer and counts buffer
+          echo "[INFO] Writing buffers to binary files."
+          const path = "out"
+          createDir(path)
+          let bufP = cast[ptr UncheckedArray[uint32]](bufT.unsafe_raw_offset())
+          let tStr = $now()
+          bufP.writeData(bufT.size.int, width, height,
+                         path, &"buffer_{tStr}")
+          let countsP = cast[ptr UncheckedArray[int]](counts.unsafe_raw_offset())
+          countsP.writeData(counts.size.int, width, height,
+                           path, &"counts_{tStr}")
+          # now get all image sensors and write their data
+          let sensors = world.getImageSensors()
+          var idx = 0
+          for s in sensors:
+            let sm = s.getMaterial.mImageSensor.sensor
+            var prefix = &"image_sensor_{idx}_{tStr}_"
+            case s.kind
+            of htBox:
+              let physSize = s.hBox.boxMax - s.hBox.boxMin
+              prefix.add &"_dx_{physSize.x:.1f}_dy_{physSize.y:.1f}_dz_{physSize.z:.1f}"
+            else: discard
+            sm.buf.writeData(sm.len, sm.width, sm.height,
+                             path, prefix)
+            inc idx
         else: discard
       of MousebuttonDown:
         ## activate relative mouse motion
