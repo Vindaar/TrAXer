@@ -354,11 +354,12 @@ proc renderFrame(j: int, ctx: ptr RenderContext) {.gcsafe.} =
 
     block LightSources:
       # 1. get a ray from a source
-      for _ in 0 ..< 1:
-        let (r, initialColor) = ctx.rnd.sampleRay(ctx.sources, ctx.targets)
-        # 2. trace it
-        let c = camera.rayColor(ctx.rnd, r, ctx.worldNoSources, maxDepth)
-        # this color itself is irrelevant, but might illuminate the image sensor!
+      if ctx.sources.len > 0:
+        for _ in 0 ..< 1:
+          let (r, initialColor) = ctx.rnd.sampleRay(ctx.sources, ctx.targets)
+          # 2. trace it
+          let c = camera.rayColor(ctx.rnd, r, ctx.worldNoSources, maxDepth)
+          # this color itself is irrelevant, but might illuminate the image sensor!
 
     ctx.counts[idx.int - frm] = ctx.counts[idx.int - frm] + 1
     let curColor = ctx.buf[idx.int - frm].toColor
@@ -676,6 +677,7 @@ proc randomSpheres(rnd: var Rand, numBalls: int): HittablesList =
           result.add translate(center, Sphere(radius: 0.2, mat: sphereMaterial))
 
 proc randomScene(rnd: var Rand, useBvh = true, numBalls = 11): HittablesList =
+  ## XXX: the BVH is also broken here :) Guess we just broke it completely, haha.
   result = initHittables(0)
 
   let groundMaterial = initMaterial(initLambertian(color(0.5, 0.5, 0.5)))
@@ -1259,6 +1261,7 @@ proc main(width = 600,
           maxDepth = 5,
           speed = 1.0,
           speedMul = 1.1,
+          spheres = false,
           llnl = false,
           llnlTwice = false,
           fullTelescope = false,
@@ -1282,8 +1285,8 @@ proc main(width = 600,
   var rnd = initRand(0x299792458)
   # World
   ## Looking at mirrors!
-  var lookFrom: Point
-  var lookAt: Point
+  var lookFrom: Point = point(1,1,1)
+  var lookAt: Point = point(0,0,0)
   var world: HittablesList
   if llnl:
     if axisAligned:
@@ -1310,6 +1313,10 @@ proc main(width = 600,
     else:
       echo "Visible target? ", visibleTarget
       world = rnd.sceneLLNL(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile, rayAt)
+  elif spheres:
+    world = rnd.randomScene(useBvh = false) ## Currently BVH broken
+    lookFrom = point(0,1.5,-2.0)
+    lookAt = point(0,0.0,0)
   else:
     world = rnd.sceneTest()
     lookFrom = point(-1, 5.0, -4) #point(-0.5, 3, -0.5)#point(3,3,2)
