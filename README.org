@@ -25,6 +25,23 @@ them to binary buffers with F5).
 
 
 
+** Controls
+
+Once you click on the window, it activates mouse control. To exit
+mouse control, press Escape.
+
+- W, A, S, D (or arrow keys): movement
+- Ctrl, Space: up, down (a bit broken)
+- T: switches to light tracing mode when single threaded (irrelevant
+  nowadays)
+- PageUp, PageDown: Increase / decrease the movement speed
+- Tab: invert the view front to back    
+- F5: Save the current buffers (image, counts and all ~ImageSensors~)
+  to the ~out~ directory, which can be plotted using the ~plotBinary~
+  helper script.
+    
+
+
 
 
 ** TODO Things to do
