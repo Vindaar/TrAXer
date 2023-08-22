@@ -1015,11 +1015,27 @@ proc getSources*(h: var HittablesList, delete: bool): HittablesList {.gcsafe.} =
       for x in result:
         h.delete(x)
 
+proc getRandomPointFromSolarModel(radius: float,
+                                  fluxRadiusCDF: seq[float],
+                                  rnd: var Rand): Point =
+  ## This function gives the coordinates of a random point in the sun, biased
+  ## by the emissionrates (which depend on the radius and the energy) ##
+  ##
+  ## `fluxRadiusCDF` is the normalized (to 1.0) cumulative sum of the total flux per
+  ## radius of all radii of the solar model.
+  let
+    randEmRate = rnd.rand(1.0)
+    rIdx = fluxRadiusCDF.lowerBound(randEmRate)
+    r = (0.0015 + (rIdx).float * 0.0005) * radius # in mm
+  let p = rnd.randomInUnitSphere() * r
+  result = Point(p)
 proc samplePoint*(h: Hittable, rnd: var Rand): Point {.gcsafe.}
 proc samplePoint*(s: Sphere, rnd: var Rand): Point {.gcsafe.} =
   ## Samples a random point on the sphere surface
   case s.mat.kind
-  of mkSolarEmission: discard
+  of mkSolarEmission:
+    ## Use the given emission properties of the solar model
+    result = getRandomPointFromSolarModel(s.radius, s.mat.mSolarEmission.fluxRadiusCDF, rnd)
   else:
     ## Sample uniformly from the sphere
     let p = rnd.randomInUnitSphere()
