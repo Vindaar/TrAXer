@@ -324,7 +324,7 @@ proc hit*(cyl: Cylinder, r: Ray, t_min, t_max: float, rec: var HitRecord): bool 
   if not solveQuadratic(a, b, c, t0, t1): return false
 
   # Check quadric shape _t0_ and _t1_ for nearest intersection
-  if t0 > tMax or t1 <= 0: return false
+  if t0 > tMax or t1 <= tMin: return false
   var tShapeHit = t0
   if tShapeHit <= 0:
     tShapeHit = t1
@@ -389,7 +389,7 @@ proc hit*(con: Cone, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
   if not solveQuadratic(a, b, c, t0, t1): return false
 
   # Check quadric shape _t0_ and _t1_ for nearest intersection
-  if t0 > tMax or t1 <= 0: return false
+  if t0 > tMax or t1 <= tMin: return false
   var tShapeHit = t0
   if tShapeHit <= 0:
     tShapeHit = t1
