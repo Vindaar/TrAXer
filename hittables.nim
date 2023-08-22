@@ -68,6 +68,7 @@ type
     mat*: Material
 
   Box* = object
+    mat*: Material
     boxMin*: Point
     boxMax*: Point
     sides*: HittablesList
