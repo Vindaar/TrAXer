@@ -616,6 +616,7 @@ proc renderSdl*(img: Image, world: var HittablesList,
       m.awaitAll:
         for j in 0 ..< THREADS:
           m.spawn renderFrame(j, ctxSeq[j].addr)
+      copyBuf(bufT, window)
 
     unlockSurface(window)
     #sdl2.clear(arg.renderer)
