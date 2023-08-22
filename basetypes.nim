@@ -39,26 +39,6 @@ proc point*(x, y, z: float): Point = Point(vec3(x, y, z))
 #  result[1] = v[2] * u[0] - v[0] * u[2]
 #  result[2] = v[0] * u[1] - v[1] * u[0]
 
-template `.`*(c: Color, field: untyped): untyped =
-  when astToStr(field) == "r":
-    c[0]
-  elif astToStr(field) == "g":
-    c[1]
-  elif astToStr(field) == "b":
-    c[2]
-  else:
-    error("Invalid field " & astToStr(field) & " for Color!")
-
-template `.`*(p: Point, field: untyped): untyped =
-  when astToStr(field) == "x":
-    p[0]
-  elif astToStr(field) == "y":
-    p[1]
-  elif astToStr(field) == "z":
-    p[2]
-  else:
-    error("Invalid field " & astToStr(field) & " for Point!")
-
 #template `.`*(v: Vec3, field: untyped): untyped =
 #  when astToStr(field) == "x":
 #    v[0]
@@ -242,10 +222,34 @@ template borrowOps(typ: typed): untyped =
   proc `-`*(v: typ): typ {.inline, borrow.}
   proc `+=`*(v: var typ, u: typ) {.inline, borrow.}
   proc `-=`*(v: var typ, u: typ) {.inline, borrow.}
-
-
 borrowOps(Color)
 borrowOps(Point)
+
+template `.`*(c: Color, field: untyped): untyped =
+  when astToStr(field) == "r":
+    c[0]
+  elif astToStr(field) == "g":
+    c[1]
+  elif astToStr(field) == "b":
+    c[2]
+  else:
+    error("Invalid field " & astToStr(field) & " for Color!")
+
+template `.`*(p: Point, field: untyped): untyped =
+  when astToStr(field) == "x":
+    p[0]
+  elif astToStr(field) == "y":
+    p[1]
+  elif astToStr(field) == "z":
+    p[2]
+  else:
+    error("Invalid field " & astToStr(field) & " for Point!")
+
+proc `==`*(p1, p2: Point): bool = result = p1.x == p2.x and p1.y == p2.y and p1.z == p2.z
+proc `==`*(p1, p2: Color): bool = result = p1.r == p2.r and p1.g == p2.g and p1.b == p2.b
+
+
+
 
 proc `$`*(v: Point): string =
   result = &"(Point: [{v[0]}, {v[1]}, {v[2]}])"
