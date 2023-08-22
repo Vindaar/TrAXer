@@ -227,6 +227,13 @@ proc add*(h: var HittablesList, lst: HittablesList) =
   for x in lst:
     h.add x
 
+proc delete*(h: var HittablesList, ht: Hittable) =
+  ## Deletes `ht` from `h` if it exists
+  let idx = h.data.find(ht)
+  if idx > 0:
+    h.data.delete(idx)
+    dec h.len
+
 proc setFaceNormal*(rec: var HitRecord, r: Ray, outward_normal: Vec3d) =
   rec.frontFace = r.dir.dot(outward_normal) < 0
   rec.normal = if rec.frontFace: outward_normal else: -outward_normal
