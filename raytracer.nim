@@ -515,6 +515,11 @@ proc renderSdl*(img: Image, world: var HittablesList,
             nCA = camera.lookAt +. newFrom
           camera.updateLookFromAt(nCL, nCA)
           resetBufs(bufT, counts)
+        of SDL_SCANCODE_TAB:
+          let nYaw = camera.yaw + PI
+          let nPitch = -camera.pitch
+          camera.updateYawPitchRoll(camera.lookFrom, nYaw, nPitch, 0.0)
+          resetBufs(bufT, counts)
         of SDL_SCANCODE_BACKSPACE:
           echo "Resetting view!"
           camera.updateLookFromAt(origLookFrom, origLookAt)
