@@ -214,6 +214,7 @@ proc sort*(h: var HittablesList, start, stop: int, cmp: proc(x, y: Hittable): bo
     result = if res: 1 else: -1
   h.data.toOpenArray(start, stop-1).sort(locCmp, order = order)
 
+proc getMaterial*(h: Hittable): Material
 proc add*(h: var HittablesList, el: Hittable) =
   ## adds a new element to h. If space is there
   h.data.add el
@@ -968,4 +969,49 @@ proc emit*(m: Material, u, v: float, p: Point): Color =
   of mkLaser:         result = m.mLaser.emit(u, v, p)
   of mkImageSensor:   result = m.mImageSensor.emit(u, v, p)
   of mkLightTarget:   result = m.mLightTarget.emit(u, v, p)
+
+proc getMaterial*(h: Hittable): Material =
+  case h.kind
+  of htSphere: result = h.hSphere.mat
+  of htCylinder: result = h.hCylinder.mat
+  of htCone: result = h.hCone.mat
+  of htDisk: result = h.hDisk.mat
+  of htBvhNode: result = Material()
+  of htXyRect: result = h.hXyRect.mat
+  of htXzRect: result = h.hXzRect.mat
+  of htYzRect: result = h.hYzRect.mat
+  of htBox: result = h.hBox.mat
+
+proc getHittablesOfKind*(h: HittablesList, kinds: set[MaterialKind]): HittablesList =
+  ## Returns all hittables of materials of the given kinds from the given list as a list itself.
+  result = initHittables(0)
+  for x in h:
+    let mat = x.getMaterial()
+    if mat.kind in kinds: result.add x
+
+proc getImageSensors*(h: HittablesList): HittablesList =
+  ## Returns all image sensors from the given list as a list itself.
+  result = getHittablesOfKind(h, {mkImageSensor})
+
+proc getLightTargets*(h: var HittablesList, delete: bool): HittablesList =
+  ## Returns all light targets from the given list as a list itself.
+  result = getHittablesOfKind(h, {mkLightTarget})
+  if delete:
+    for x in result:
+      h.delete(x)
+
+proc removeInvisibleTargets*(h: var HittablesList) =
+  let lt = getLightTargets(h, delete = false)
+  for x in lt:
+    if not x.getMaterial.mLightTarget.visible:
+      h.delete(x)
+
+proc getSources*(h: var HittablesList, delete: bool): HittablesList {.gcsafe.} =
+  ## Returns all light sources from the given list as a list itself.
+  ## These are removed from the input.
+  {.cast(gcsafe).}:
+    result = getHittablesOfKind(h, {mkDiffuseLight, mkLaser, mkSolarEmission})
+    if delete:
+      for x in result:
+        h.delete(x)
 
