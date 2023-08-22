@@ -105,27 +105,11 @@ type
 #  h.data = nil
 #  h.len = 0
 
-proc clone*(h: Hittable): Hittable =
-  result = Hittable(trans: h.trans,
-                    kind: h.kind)
-  case h.kind
-  of htSphere:   result.hSphere = h.hSphere
-  of htCylinder: result.hCylinder = h.hCylinder
-  of htCone:     result.hCone = h.hCone
-  of htBvhNode:  result.hBvhNode = h.hBvhNode
-  of htXyRect:   result.hXyRect = h.hXyRect
-  of htXzRect:   result.hXzRect = h.hXzRect
-  of htYzRect:   result.hYzRect = h.hYzRect
-  of htBox:      result.hBox = h.hBox
-  of htDisk:     result.hDisk = h.hDisk
 
 proc initHittables*(size: int = 8): HittablesList =
   ## allocates memory for `size`, but remains empty
   let size = if size < 8: 8 else: size
   result.len = 0
-  #result.size = size
-  #if size > 0:
-  #  result.data = cast[ptr UncheckedArray[Hittable]](allocShared0(sizeof(Hittable) * size))
   result.data = newSeqOfCap[Hittable](size)
 
 proc `[]`*(h: HittablesList, idx: int): Hittable =
@@ -147,28 +131,6 @@ iterator items*(h: HittablesList): Hittable =
 proc initBvhNode*(rnd: var Rand, list: HittablesList, start, stop: int): BvhNode
 proc initBvhNode*(rnd: var Rand, list: HittablesList): BvhNode =
   result = initBvhNode(rnd, list, 0, list.len)
-
-#proc resize*(h: var HittablesList, newSize: int = 0) =
-#  let newLen = if newSize > 0: newSize
-#               elif h.size < 8: 8
-#               else: h.size * 3 div 2
-#  var newBuf = cast[ptr UncheckedArray[Hittable]](allocShared0(sizeof(Hittable) * newLen))
-#  if h.size > 0:
-#    for idx in 0 ..< newLen:
-#      newBuf[idx] = h.data[idx]
-#
-#    #copyMem(newBuf[0].addr, h.data[0].addr, h.size * sizeof(Hittable))
-#    deallocShared(h.data)
-#  h.data = newBuf
-#  h.size = newLen
-#
-#proc setLen*(h: var HittablesList, len: int) =
-#  if len > h.size:
-#    # resize
-#    h.resize(len)
-#  else:
-#    # just set new length
-#    h.len = len
 
 proc `[]`*(h: HittablesList, slice: Slice[int]): HittablesList =
   let sliceLen = slice.b - slice.a
