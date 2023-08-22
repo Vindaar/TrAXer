@@ -86,9 +86,11 @@ proc rayColor*(c: Camera, rnd: var Rand, r: Ray, world: HittablesList, depth: in
   if world.hit(r, 0.001, Inf, rec):
     var scattered: Ray
     var attenuation: Color
-      return attenuation * rayColor(scattered, world, depth - 1)
-    return color(0, 0, 0)
+    var emitted = rec.mat.emit(rec.u, rec.v, rec.p)
     if not rec.mat.scatter(rnd, r, rec, attenuation, scattered):
+      result = emitted
+    else:
+      result = attenuation * c.rayColor(rnd, scattered, world, depth - 1) + emitted
   else:
     result = c.background
 
