@@ -22,6 +22,14 @@ proc rayColor*(r: Ray, world: HittablesList, depth: int): Color =
     if rec.mat.scatter(r, rec, attenuation, scattered):
       return attenuation * rayColor(scattered, world, depth - 1)
     return color(0, 0, 0)
+  else:
+    result = c.background
+
+  when false: ## Old code with background gradient
+    let unitDirection = unitVector(r.dir)
+    let t = 0.5 * (unitDirection.y + 1.0)
+    result = (1.0 - t) * color(1.0, 1.0, 1.0) + t * color(0.5, 0.7, 1.0)
+
 
   let unitDirection = unitVector(r.dir)
   let t = 0.5 * (unitDirection.y + 1.0)
@@ -753,7 +761,9 @@ proc main(width = 600,
                           #aperture = aperture,
                           width = width,
                           defocusAngle = defocusAngle,
-                          focusDist = distToFocus)
+                          focusDist = distToFocus,
+                          #background = color(0,0,0))# color(0.5, 0.7, 1.0)) # default background
+                          background = color(0.5, 0.7, 1.0)) # default background
 
   # Rand seed
   randomize(0xE7)

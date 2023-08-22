@@ -10,6 +10,7 @@ type
     pixel_delta_u: Vec3d
     pixel_delta_v: Vec3d
     defocusAngle: float
+    background*: Color ## Color of the scene background. This could also be a `Texture`!
 
     u, v, w: Vec3d
     lookFrom*: Point
@@ -24,6 +25,7 @@ proc initCamera*(lookFrom, lookAt: Point, vup: Vec3d, vfov, aspectRatio: float,
                  width: int,
                  defocusAngle: float,
                  focusDist: float,
+                 background: Color,
                  yaw = NaN, pitch = NaN, roll = NaN): Camera =
   result = new Camera
   let height = width.float / aspect_ratio
@@ -76,6 +78,7 @@ proc initCamera*(lookFrom, lookAt: Point, vup: Vec3d, vfov, aspectRatio: float,
     echo "Init camera at yaw = ", result.yaw, ", pitch = ", result.pitch
 
   ## store args
+  result.background = background
   result.width = width
   result.lookFrom = lookFrom
   result.lookAt = lookAt
@@ -87,18 +90,21 @@ proc initCamera*(lookFrom, lookAt: Point, vup: Vec3d, vfov, aspectRatio: float,
 proc initCamera*(lookFrom: Point, yaw, pitch, roll: float, vup: Vec3d, vfov, aspectRatio: float,
                  width: int,
                  defocusAngle: float,
-                 focusDist: float): Camera =
+                 focusDist: float,
+                 background: Color): Camera =
   result = initCamera(lookFrom, point(0, 0, 0), vup, vfov, aspectRatio, width,
                       defocusAngle, focusDist,
+                      background,
                       yaw = yaw, pitch = pitch, roll = roll)
 
 proc initCamera*(lookFrom: Point, dir: Vec3d, focusIn: float, vup: Vec3d, vfov, aspectRatio: float,
                  width: int,
                  defocusAngle: float,
-                 focusDist: float): Camera =
+                 focusDist: float,
+                 background: Color): Camera =
   let lookAt = (dir.unitVector() * focusIn).Point
   result = initCamera(lookFrom, lookAt, vup, vfov,
-                      aspectRatio, width, defocusAngle, focusDist)
+                      aspectRatio, width, defocusAngle, focusDist, background)
 
 proc copyFields(c, mc: Camera) =
   c.center = mc.center
@@ -108,6 +114,7 @@ proc copyFields(c, mc: Camera) =
   c.pixel_delta_u = mc.pixel_delta_u
   c.pixel_delta_v = mc.pixel_delta_v
   c.defocusAngle = mc.defocusAngle
+  c.background = mc.background
   c.width = mc.width
   c.u = mc.u
   c.v = mc.v
@@ -127,21 +134,21 @@ proc clone*(c: Camera): Camera =
   result.copyFields(c)
 
 proc updateLookFrom*(c: Camera, lookFrom: Point) =
-  var mc = initCamera(lookFrom, c.lookAt, c.vup, c.vfov, c.aspectRatio, c.width, c.defocusAngle, c.focusDist)
+  var mc = initCamera(lookFrom, c.lookAt, c.vup, c.vfov, c.aspectRatio, c.width, c.defocusAngle, c.focusDist, c.background)
   c.copyFields(mc)
 
 proc updateLookFromAt*(c: Camera, lookFrom, lookAt: Point) =
-  var mc = initCamera(lookFrom, lookAt, c.vup, c.vfov, c.aspectRatio, c.width, c.defocusAngle, c.focusDist)
+  var mc = initCamera(lookFrom, lookAt, c.vup, c.vfov, c.aspectRatio, c.width, c.defocusAngle, c.focusDist, c.background)
   mc.pitch = c.pitch
   mc.yaw = c.yaw
   c.copyFields(mc)
 
 proc updateLookFromFront*(c: Camera, lookFrom: Point) =
-  var mc = initCamera(lookFrom, lookFrom.normalize().Vec3d, (c.lookFrom - c.lookAt).length(), c.vup, c.vfov, c.aspectRatio, c.width, c.defocusAngle, c.focusDist)
+  var mc = initCamera(lookFrom, lookFrom.normalize().Vec3d, (c.lookFrom - c.lookAt).length(), c.vup, c.vfov, c.aspectRatio, c.width, c.defocusAngle, c.focusDist, c.background)
   c.copyFields(mc)
 
 proc updateLookFromAtFront*(c: Camera, lookFrom, lookAt: Point) =
-  var mc = initCamera(lookFrom, lookAt.normalize().Vec3d, (c.lookFrom - c.lookAt).length(), c.vup, c.vfov, c.aspectRatio, c.width, c.defocusAngle, c.focusDist)
+  var mc = initCamera(lookFrom, lookAt.normalize().Vec3d, (c.lookFrom - c.lookAt).length(), c.vup, c.vfov, c.aspectRatio, c.width, c.defocusAngle, c.focusDist, c.background)
   c.copyFields(mc)
 
 proc updateYawPitchRoll*(c: Camera, lookFrom: Point, yaw, pitch, roll: float) =
@@ -150,7 +157,7 @@ proc updateYawPitchRoll*(c: Camera, lookFrom: Point, yaw, pitch, roll: float) =
     yaw += 2 * PI
   yaw = yaw mod (2 * PI)
   let pitch = clamp(pitch, -PI/2.0, PI/2.0)
-  var mc = initCamera(lookFrom, yaw, pitch, roll, c.vup, c.vfov, c.aspectRatio, c.width, c.defocusAngle, c.focusDist)
+  var mc = initCamera(lookFrom, yaw, pitch, roll, c.vup, c.vfov, c.aspectRatio, c.width, c.defocusAngle, c.focusDist, c.background)
   c.copyFields(mc)
 
 import std/random
