@@ -749,7 +749,7 @@ proc main(width = 600,
       lookAt = point(171.4358852563132, 58.70226619735943, -13.84078935031287) #point(0, 1.5, 2.5)#point(0,0,-1)
     world = sceneLLNL() #mixOfSpheres() #sceneRedBlue() # #sceneCast() #randomScene(useBvh = true, 11) #sceneCast() #randomScene()
   else:
-    world = sceneTest()
+    world = rnd.sceneTest()
     lookFrom = point(-1, 5.0, -4) #point(-0.5, 3, -0.5)#point(3,3,2)
     lookAt = point(1.0, 3.0, 2.0) #point(0, 1.5, 2.5)#point(0,0,-1)
   #let lookFrom = point(0,1.5,-2.0)

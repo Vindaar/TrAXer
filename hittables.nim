@@ -135,10 +135,8 @@ proc initBvhNode*(rnd: var Rand, list: HittablesList): BvhNode =
 proc `[]`*(h: HittablesList, slice: Slice[int]): HittablesList =
   let sliceLen = slice.b - slice.a
   result = initHittables(sliceLen)
-  #result.data = cast[ptr UncheckedArray[Hittable]](allocShared0(sizeof(Hittable) * sliceLen))
   for idx in 0 ..< sliceLen:
     result.data[idx] = h.data[slice.a + idx]
-  #copyMem(result.data[0].addr, h.data[slice.a].addr, sliceLen * sizeof(Hittable))
   result.len = sliceLen
 
 proc sort*(h: var HittablesList, start, stop: int, cmp: proc(x, y: Hittable): bool,
@@ -152,10 +150,6 @@ proc add*(h: var HittablesList, el: Hittable) =
   ## adds a new element to h. If space is there
   h.data.add el
   inc h.len
-  #if h.len == h.size - 1:
-  #  h.resize()
-  #inc h.len
-  #h[h.len - 1] = el
 
 proc clone*(h: Hittable): Hittable =
   result = Hittable(trans: h.trans,
@@ -309,7 +303,6 @@ proc hit*(cyl: Cylinder, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   if pHit.z < cyl.zMin or pHit.z > cyl.zMax or phi > cyl.phiMax:
       if tShapeHit == t1: return false
       tShapeHit = t1
-      ## XXX: not applicable because we don't track floating point uncertainty
       if t1 > tMax: return false
       # Compute cylinder hit point and $\phi$
       pHit = r.at(tShapeHit)
@@ -335,7 +328,7 @@ proc hit*(cyl: Cylinder, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
 
   rec.t = tShapeHit
   rec.p = r.at(rec.t)
-  let outward_normal = normalize(cross(dpdu, dpdv)) #(rec.p) / s.radius
+  let outward_normal = normalize(cross(dpdu, dpdv))
   rec.setFaceNormal(r, outward_normal.Vec3d)
   rec.mat = cyl.mat
 
