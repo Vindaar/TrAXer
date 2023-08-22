@@ -1,139 +1,113 @@
-* Ray Tracing In One Weekend - Nim edition
+* TrAXer
 
-A quick and dirty version of [[https://raytracing.github.io/][Ray Tracing in One Weekend]], using Nim.
+Traces Real Axion X-ray Emission Rays ? Or something like that. Who
+knows, naming things is always fun huh.
 
-I went through the book to better understand some concepts
-(essentially how to structure code in ray tracing) and not to
-write the nicest code. For a prettier Nim implementation take a look
-at @mratsim's [[https://github.com/mratsim/trace-of-radiance][trace of radiance]].
+This is a fork of [[https://github.com/Vindaar/rayTracingInOneWeekend][my Raytracing In One Weekend]] implementation (see [[https://raytracing.github.io/][Ray
+Tracing in One Weekend]]), which majorly extends it.
 
-The final output of my code (final book 1 result):
+It adds some features of the second book, others from the amazing
+https://pbr-book.org/, but most importantly makes it a useful tool for
+my work:
 
-[[media/rayTracing.png]]
+It is now a raytracer for X-rays (in the context of Axion helioscopes
+like CAST or (Baby)IAXO).
 
-On a positive note I have to say that I was really surprised that "in
-one weekend" is not an exaggeration!
+To make it actually useful, it has an interactive raytracing mode
+using SDL2, so that you can investigate the scene geometry in real
+time. The standard approach to sample rays from the camera is extended
+by a secondary ray sampling, which samples directly from light sources
+towards ~LightTargets~. In addition with ~ImageSensors~ we can
+visualize the accumulation of rays on a sensor in the scene (and save
+them to binary buffers with F5).
 
-The lessons learned here will need to be applied to an X-ray ray
-tracer (in which the material interactions of course are very
-different) here:
-
-https://github.com/Vindaar/AxionElectronLimit/blob/wip_thesis/raytracer2018.nim
-
-** New
-
-- more shapes:
-  - rectangles, boxes, disks
-- bounding volume hierarchies (BVH nodes) and axis-aligned bounding
-  boxes (AABBs) for better performance in scenes with many objects
-- rendering to SDL2 window with *interactive controls*
-- multithreaded rendering using Weave
-
-** Benchmarks
-
-BVH benchmarks.
-
-Benchmarking the random scene from end of book 1.
-Varying:
-- samples per pixel
-- resolution
-- number of balls in scene
-
-Only the small balls are contained in BVH nodes. The 300 main balls as
-well as the "globe" are not contained in the BVH. All benchmarks are
-single threaded.
-
-Aspect ratio: 3 / 2
-
-They are run on my laptop, so take them with a grain of salt. :) The
-idea is only to understand the scaling of each parameter using BVH
-vs. without.
+** Show me!
 
 
-| Width | samplesPerPixel | BVH   | Num Spheres | time / s |
-|-------+-----------------+-------+-------------+----------|
-|   100 |             100 | true  | 11 • 11     |     4.43 |
-|   200 |             100 | true  | 11 • 11     |    18.04 |
-|   300 |             100 | true  | 11 • 11     |    41.79 |
-|   100 |             100 | false | 11 • 11     |    17.02 |
-|   200 |             100 | false | 11 • 11     |    68.99 |
-|   300 |             100 | false | 11 • 11     |   156.50 |
-|   100 |             100 | false | 5 • 5       |     3.65 |
-|   200 |             100 | false | 5 • 5       |    14.87 |
-|   300 |             100 | false | 5 • 5       |    33.48 |
-|   100 |             100 | true  | 5 • 5       |     1.63 |
-|   200 |             100 | true  | 5 • 5       |     6.54 |
-|   300 |             100 | true  | 5 • 5       |    15.34 |
-|   100 |             500 | true  | 11 • 11     |    22.32 |
-|   200 |             500 | true  | 11 • 11     |    90.03 |
-|   300 |             500 | true  | 11 • 11     |   205.81 |
-|   100 |             500 | false | 11 • 11     |    85.31 |
-|   200 |             500 | false | 11 • 11     |   345.69 |
-|   300 |             500 | false | 11 • 11     |   784.24 |
-|   100 |             300 | false | 11 • 11     |    52.88 |
-|   200 |             300 | false | 11 • 11     |   210.40 |
-|   300 |             300 | false | 11 • 11     |   470.47 |
-|   100 |             300 | true  | 11 • 11     |    13.33 |
-|   200 |             300 | true  | 11 • 11     |    54.02 |
-|   300 |             300 | true  | 11 • 11     |   123.69 |
-|   200 |             100 | true  | 15 • 15     |    31.40 |
-|   200 |             100 | false | 15 • 15     |   134.20 |
 
-Let's generate a bunch of plots from this. Ideally we'd want more
-different width / number of spheres values, but well.
 
-#+begin_src nim :tangle plots_benchmark.nim :results raw
-import ggplotnim, strutils, math, strformat
-proc compNumSphere(s: string): int = parseInt(split(s)[0]) ^ 2
-var df = readCsvTyped("benchmark_results.csv")
-  .mutate(f{string -> int: "Num Spheres" ~ compNumSphere(df["Num Spheres"][idx])})
 
-proc embed(fname: string) = echo &"[[{fname}]]"
-## plots for varying width and different constant settings
-proc genPlots(x: string, cols: seq[string]) =
-  for tup, subDf in groups(df.group_by(cols)):
-    let fname = &"media/bench_{tup[0][0]}_{tup[0][1]}_{tup[1][0]}_{tup[1][1]}.png"
-    if subDf.len > 2:
-      ggplot(subDf, aes(x, "time / s", color = "BVH")) +
-        geom_point() +
-        ggtitle(&"Comparison of {x} for {tup[0][0]}: {tup[0][1]}, {tup[1][0]}: {tup[1][1]}") +
-        theme_opaque() +
-        ggsave(fname)
-      embed(fname)
+** TODO Things to do
 
-genPlots("Width", @["samplesPerPixel", "Num Spheres"])
-genPlots("samplesPerPixel", @["Width", "Num Spheres"])
-genPlots("Num Spheres", @["Width", "samplesPerPixel"])
-block SameSphere:
-  let dfSph = df.filter(f{c"Num Spheres" == 11 * 11})
-  proc genFacet(col, facet: string) =
-    let fname = &"media/bench_facet_{facet}_{col}.png"
-    ggplot(dfSph, aes(col, "time / s", color = "BVH")) +
-      facet_wrap(facet) +
-      geom_point() +
-      ggtitle(&"Comparison of scaling of time vs. {col} for different {facet}") +
-      theme_opaque() +      
-      ggsave(fname)
-    embed(fname)      
-  genFacet("Width", "samplesPerPixel")
-  genFacet("samplesPerPixel", "Width")
+- [ ] Use colormap for the ~ttLights~ view
+  -> Will this even remain? We could also implement it by just having
+  the key bring the camera directly to the image sensor and/or reading
+  from the ~sensorBuf~ instead of having a separate sampling proc
+- [X] Refactor ~ttLights~ code to also work for multithreaded
+  -> Maybe just rely on the actual ~Sensor~ buffer? And then when in
+  ~ttLights~ mode we could _only_ sample rays based on the sources and
+  simply display the image sensor buffer? That way we wouldn't get
+  into the trouble of having to read and write from the temp buffer in
+  places we don't know where they might end up on.
+  - [X] the underlying buffer is now protected by a ~Lock~, both for
+    read and write access
+  - At this point it should be pretty much really GC safe. Each thread
+    has its own RNG, ~Camera~ and ~HittablesList~. Relevant
+    information between them is synced after each tracing run is done.
+    - [X] ORC is still not happy though.
+      -> I marked all ref types as ~acyclic~ (hittables and the
+      textures). This seems to have fixed it. They are indeed
+      acyclic. We have no intention of constructing ref cycles after all.
+- [X] Disable sensitivity of ~ImageSensor~ to rays emitted by the
+  ~Camera~ directly! (I guess they kind of act like noise haha)
+  -> I gave the ~Ray~ type a ~RayType~ field that indicates if the
+  initial ray was created from the ~Camera~ or directly from a light
+  source.
+  *NOTE*: This currently implies that if a ray is shot from the
+  camera, hits a light source and then hits an image sensor, no counts
+  are recorded on the image sensor! *Only* the rays we sample directly
+  from light sources count.
+  *BUT*: Currently our light sources act as perfect sinks anyway! They
+  do not scatter light, so this scenario does not exist anyway.
+- [ ] A BVH node of the telescope is currently broken! It causes all
+  sorts of weirdness. The shape is correct, but the lighting is very wrong!  
 
-block NumSphere:
-  let dfSph = df.filter(f{c"Width" == 200 and `samplesPerPixel` == 100})
-  let fname = &"media/bench_number_of_spheres.png"
-  ggplot(dfSph, aes("Num Spheres", "time / s", color = "BVH")) +
-    geom_point() +
-    margin(top = 1.75) +
-    ggtitle(&"Comparison of scaling of time vs. # spheres for 100 samples per pixel, 200px width") +
-    theme_opaque() +    
-    ggsave(fname)
-  embed(fname)
-#+end_src
+- [X] make the multithreaded code safer. It's still a bit crazy.
+  -> taken care of by using acyclic & a lock on the sensor
+- [ ] Implement X-ray reflectivities
+- [X] Check LLNL telescope setup
+- [ ]
 
-We only show a few plots here. For all plots see [[media/README.org]].
 
-[[media/bench_facet_samplesPerPixel_Width.png]]
+- [X] Implement ~Target~ material that is used when sampling rays for
+  ~DiffuseLight~.
+- [X] For parallel light use ~Laser~ instead!
+- [X] Implement ~SolarEmission~ material to sample correctly based on
+  flux per radius CDF
 
-[[media/bench_facet_Width_samplesPerPixel.png]]
+- [ ] *COULD WE* add an option to "draw" a sampled ray? I think it
+  should be pretty easy!
+  1. have a button, say F8, when pressed it samples a ray
+  2. trace the entire ray and *mark each hit, store each intermittent
+     ray*
+  3. construct cylinders for each ray and overlay them on the sampled
+     ray
+     -> How?
+     1. Use ray origin as target position for the cylinder origin
+     2. Use ray direction as guide for required rotation
+     3. Use (hit position - start) as length, making it end at the hit
+  4. add these cylinders to the ~world~ ~HittablesList~
+  5. update the ~world~ of each threads data.
+  6. upon new sampling the ray should appear.
+  Potential problem: The added ray interferes with the image we see on
+  the ~ImageSensor~! -> Add only to the ~world~ that is used for the
+  ~Camera~!
 
-[[media/bench_number_of_spheres.png]]
+- [ ] Add ~ImageSensorRGB~ which stores the colors in each pixel. That
+  way can give each layer a color, e.g. using ggplot2 colors and then
+  can tell where rays from each layer end up on the sensor!  
+
+- [ ] *ADD SANITY CHECK* that checks that in our current model indeed
+  the bottom part of layer i+1 is perfectly flush with the top part of
+  layer i!
+
+*NOTE*:
+The LLNL simulation is slightly wrong in the sense that the mirrors
+actually become _smaller_ towards the end with smaller radius, because
+we have real cone cutouts. In reality it starts from flat glass with
+225 mm length and a fixed width, which is just curved to a cone
+shape. That means the required 'angle' φ_max actually increases along
+the axis. We don't model this, but the effect of this should be _very_
+marginal.
+See fig. 1.4 of the DTU thesis about the LLNL telescope.
+
