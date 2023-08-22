@@ -915,6 +915,12 @@ proc scatter*(m: ImageSensor, rnd: var Rand, r_in: Ray, rec: HitRecord,
               attenuation: var Color, scattered: var Ray): bool {.gcsafe.} =
   ## An image sensor is a perfect sink! (At least we assume so)
   result = false
+  if r_in.typ == rtLight:
+    #echo "Hit at: ", (rec.u, rec.v)
+    let x = (rec.u * (m.sensor.width - 1).float).round.int
+    let y = (rec.v * (m.sensor.height - 1).float).round.int
+    m.sensor[x, y] = m.sensor[x, y] + 1
+
 proc scatter*(m: Material,
               rnd: var Rand,
               r_in: Ray, rec: HitRecord,
@@ -936,7 +942,22 @@ proc emit*[T: NonEmittingMaterials](m: T, u, v: float, p: Point): Color =
 proc emit*[T: DiffuseLight | Laser | SolarEmission](m: T, u, v: float, p: Point): Color =
   result = m.emit.value(u, v, p)
 
-proc emit*(m: ImageSensor, u, v: float, p: Point): Color = discard
+import colormaps
+proc emit*(m: ImageSensor, u, v: float, p: Point): Color =
+  # adjust the sensor data
+  #echo "Emission at p = ", p, " (u, v) = ", (u, v)
+  let x = (u * (m.sensor.width - 1).float).round.int
+  let y = (v * (m.sensor.height - 1).float).round.int
+  let val = m.sensor[x, y]
+  if val > 0:
+    #echo val, " max ", m.sensor.currentMax[]
+    let cIdx = (val.float / m.sensor.currentMax[].float) * 255.0
+    let v = ViridisRaw[cIdx.round.int]
+    result = color(v[0], v[1], v[2])
+  else:
+    let v = ViridisRaw[0]
+    result = color(v[0], v[1], v[2])
+
 proc emit*(m: Material, u, v: float, p: Point): Color =
   case m.kind
   of mkLambertian:    result = m.mLambertian.emit(u, v, p)
