@@ -178,29 +178,29 @@ template length_squared*(v: Vec3d): float = v.length2()
 template length_squared*(v: Point): float = v.Vec3d.length2()
 template length_squared*(v: Color): float = v.Vec3d.length2()
 
-proc randomVec*(min = 0.0, max = 1.0): Vec3d =
+proc randomVec*(rnd: var Rand, min = 0.0, max = 1.0): Vec3d =
   ## generate a random 3 vector
-  result = vec3(rand(min .. max), rand(min .. max), rand(min .. max))
+  result = vec3(rnd.rand(min .. max), rnd.rand(min .. max), rnd.rand(min .. max))
 
-proc randomInUnitSphere*(): Vec3d =
+proc randomInUnitSphere*(rnd: var Rand): Vec3d =
   while true:
-    let p = randomVec(-1, 1)
+    let p = rnd.randomVec(-1, 1)
     if p.length_squared >= 1: continue
     return p
 
-proc randomUnitVector*(): Vec3d =
-  result = unitVector(randomInUnitSphere())
+proc randomUnitVector*(rnd: var Rand): Vec3d =
+  result = unitVector(rnd.randomInUnitSphere())
 
-proc randomInHemisphere*(normal: Vec3d): Vec3d =
-  let inUnitSphere = randomInUnitSphere()
+proc randomInHemisphere*(rnd: var Rand, normal: Vec3d): Vec3d =
+  let inUnitSphere = rnd.randomInUnitSphere()
   if inUnitSphere.dot(normal) > 0.0: # same hemisphere as the normal
     result = inUnitSphere
   else:
     result = -inUnitSphere
 
-proc randomInUnitDisk*(): Vec3d =
+proc randomInUnitDisk*(rnd: var Rand): Vec3d =
   while true:
-    let p = vec3(rand(-1.0 .. 1.0), rand(-1.0 .. 1.0), 0)
+    let p = vec3(rnd.rand(-1.0 .. 1.0), rnd.rand(-1.0 .. 1.0), 0)
     if p.length_squared() >= 1.0: continue
     return p
 

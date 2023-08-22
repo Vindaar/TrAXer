@@ -10,7 +10,7 @@ when compileOption("threads"):
   import weave
 var THREADS = 16
 
-proc rayColor*(r: Ray, world: HittablesList, depth: int): Color =
+proc rayColor*(c: Camera, rnd: var Rand, r: Ray, world: HittablesList, depth: int): Color {.gcsafe.} =
   var rec: HitRecord
 
   if depth <= 0:
@@ -19,9 +19,9 @@ proc rayColor*(r: Ray, world: HittablesList, depth: int): Color =
   if world.hit(r, 0.001, Inf, rec):
     var scattered: Ray
     var attenuation: Color
-    if rec.mat.scatter(r, rec, attenuation, scattered):
       return attenuation * rayColor(scattered, world, depth - 1)
     return color(0, 0, 0)
+    if not rec.mat.scatter(rnd, r, rec, attenuation, scattered):
   else:
     result = c.background
 
@@ -72,7 +72,9 @@ proc toUInt32(c: ColorU8): uint32 =
             c.g.int shl 8 or
             c.b.int).uint32
 
-proc render*(img: Image, f: string, world: var HittablesList,
+proc render*(img: Image, f: string,
+             rnd: var Rand,
+             world: var HittablesList,
              camera: Camera,
              samplesPerPixel, maxDepth: int) =
   ## Write a ppm file to `f`
@@ -83,12 +85,14 @@ proc render*(img: Image, f: string, world: var HittablesList,
     for i in 0 ..< img.width:
       var pixelColor = color(0, 0, 0)
       for s in 0 ..< samplesPerPixel:
-        let r = camera.getRay(i, j)
-        pixelColor += rayColor(r, world, maxDepth)
+        let r = camera.getRay(rnd, i, j)
+        pixelColor += camera.rayColor(rnd, r, world, maxDepth)
       f.writeColor(pixelColor, samplesPerPixel)
   f.close()
 
-proc renderMC*(img: Image, f: string, world: var HittablesList,
+proc renderMC*(img: Image, f: string,
+               rnd: var Rand,
+               world: var HittablesList,
                camera: Camera,
                samplesPerPixel, maxDepth: int) =
   ## Write a ppm file to `f`
@@ -98,11 +102,12 @@ proc renderMC*(img: Image, f: string, world: var HittablesList,
   var buf = newTensor[Color](@[img.height, img.width])
   var counts = newTensor[int](@[img.height, img.width])
   var idx = 0
+
   while idx < numRays:
-    let x = rand(img.width)
-    let y = rand(img.height)
-    let r = camera.getRay(x, y)
-    let color = rayColor(r, world, maxDepth)
+    let x = rnd.rand(img.width)
+    let y = rnd.rand(img.height)
+    let r = camera.getRay(rnd, x, y)
+    let color = camera.rayColor(rnd, r, world, maxDepth)
     buf[y, x] = buf[y, x] + color
     counts[y, x] = counts[y, x] + 1
     inc idx
@@ -173,6 +178,7 @@ proc copyBuf(bufT: Tensor[uint32], window: SurfacePtr) =
         surf[y, x] = bufT[y, x]
 
 proc renderSdl*(img: Image, world: var HittablesList,
+                rnd: var Rand, # the *main thread* RNG
                 camera: Camera,
                 samplesPerPixel, maxDepth: int,
                 speed = 1.0, speedMul = 1.1,
@@ -391,24 +397,24 @@ proc mixOfSpheres(): HittablesList =
   result.add translate(vec3(-1.0, 0.0, -1), Sphere(radius: -0.4, mat: matLeft))
   result.add translate(vec3(1.0, 0.0, -1), Sphere(radius: 0.5, mat: matRight))
 
-proc randomSpheres(numBalls: int): HittablesList =
+proc randomSpheres(rnd: var Rand, numBalls: int): HittablesList =
   result = initHittables(0)
   for a in -numBalls ..< numBalls:
     for b in -numBalls ..< numBalls:
-      let chooseMat = rand(1.0)
-      var center = point(a.float + 0.9 * rand(1.0), 0.2, b.float + 0.9 * rand(1.0))
+      let chooseMat = rnd.rand(1.0)
+      var center = point(a.float + 0.9 * rnd.rand(1.0), 0.2, b.float + 0.9 * rnd.rand(1.0))
 
       if (center - point(4, 0.2, 0)).length() > 0.9:
         var sphereMaterial: Material
         if chooseMat < 0.8:
           # diffuse
-          let albedo = randomVec().Color * randomVec().Color
+          let albedo = rnd.randomVec().Color * rnd.randomVec().Color
           sphereMaterial = initMaterial(initLambertian(albedo))
           result.add translate(center, Sphere(radius: 0.2, mat: sphereMaterial))
         elif chooseMat < 0.95:
           # metal
-          let albedo = randomVec(0.5, 1.0).Color
-          let fuzz = rand(0.0 .. 0.5)
+          let albedo = rnd.randomVec(0.5, 1.0).Color
+          let fuzz = rnd.rand(0.0 .. 0.5)
           sphereMaterial = initMaterial(initMetal(albedo, fuzz))
           result.add translate(center, Sphere(radius: 0.2, mat: sphereMaterial))
         else:
@@ -416,15 +422,15 @@ proc randomSpheres(numBalls: int): HittablesList =
           sphereMaterial = initMaterial(initDielectric(1.5))
           result.add translate(center, Sphere(radius: 0.2, mat: sphereMaterial))
 
-proc randomScene(useBvh = true, numBalls = 11): HittablesList =
+proc randomScene(rnd: var Rand, useBvh = true, numBalls = 11): HittablesList =
   result = initHittables(0)
 
   let groundMaterial = initMaterial(initLambertian(color(0.5, 0.5, 0.5)))
   result.add translate(vec3(0.0, -1000.0, 0.0), Sphere(radius: 1000, mat: groundMaterial))
 
-  let smallSpheres = randomSpheres(numBalls)
+  let smallSpheres = rnd.randomSpheres(numBalls)
   if useBvh:
-    result.add initBvhNode(smallSpheres)
+    result.add rnd.initBvhNode(smallSpheres)
   else:
     result.add smallSpheres
 
@@ -481,15 +487,15 @@ proc sceneDisk(): HittablesList =
   let groundMaterial = initMaterial(initLambertian(color(0.2, 0.7, 0.2)))
   result.add Disk(distance: 1.5, radius: 1.5, mat: groundMaterial)
 
-proc sceneTest(): HittablesList =
+proc sceneTest(rnd: var Rand): HittablesList =
   result = initHittables(0)
 
   let groundMaterial = initMaterial(initLambertian(color(0.2, 0.7, 0.2)))
   let EarthR = 6_371_000.0
   result.add translate(point(0, -EarthR - 5, 0), Sphere(radius: EarthR, mat: groundMaterial))
 
-  #let smallSpheres = randomSpheres(3)
-  #result.add initBvhNode(smallSpheres)
+  let smallSpheres = rnd.randomSpheres(3)
+  result.add rnd.initBvhNode(smallSpheres)
 
   let matBox = initMaterial(initLambertian(color(1,0,0)))
 

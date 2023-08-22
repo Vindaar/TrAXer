@@ -161,25 +161,25 @@ proc updateYawPitchRoll*(c: Camera, lookFrom: Point, yaw, pitch, roll: float) =
   c.copyFields(mc)
 
 import std/random
-proc pixelSampleSquare(c: Camera): Vec3d =
+proc pixelSampleSquare(c: Camera, rnd: var Rand): Vec3d =
   # Returns a random point in the square surrounding a pixel at the origin.
-  let px = rand(-0.5 .. 0.5)
-  let py = rand(-0.5 .. 0.5)
+  let px = rnd.rand(-0.5 .. 0.5)
+  let py = rnd.rand(-0.5 .. 0.5)
   result = (px * c.pixel_delta_u) + (py * c.pixel_delta_v)
 
-proc defocusDiskSample(c: Camera): Point =
+proc defocusDiskSample(c: Camera, rnd: var Rand): Point =
   # a random point in the camera defocus disk.
-  let p = randomInUnitDisk()
+  let p = rnd.randomInUnitDisk()
   result = c.center + ((p[0] * c.defocus_disk_u) + (p[1] * c.defocus_disk_v))
 
-proc getRay*(c: Camera, i, j: int): Ray =
+proc getRay*(c: Camera, rnd: var Rand, i, j: int): Ray =
   # Get a randomly-sampled camera ray for the pixel at location i,j, originating from
   # the camera defocus disk.
   # (Updated from RT in one Weekend V4)
-  let pixel_center = c.pixel00_loc + (i.float * c.pixel_delta_u) + (j.float * c.pixel_delta_v)
-  let pixel_sample = pixel_center + c.pixel_sample_square()
+  let pixelCenter = c.pixel00_loc + (i.float * c.pixel_delta_u) + (j.float * c.pixel_delta_v)
+  let pixelSample = pixel_center + c.pixelSampleSquare(rnd)
 
-  let ray_origin = if c.defocusAngle <= 0.0: c.center else: c.defocus_disk_sample()
-  let ray_direction = pixel_sample - ray_origin
+  let rayOrigin = if c.defocusAngle <= 0.0: c.center else: c.defocusDiskSample(rnd)
+  let rayDirection = pixelSample - rayOrigin
 
   result = initRay(ray_origin, ray_direction)

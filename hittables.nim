@@ -140,9 +140,9 @@ iterator items*(h: HittablesList): Hittable =
   for idx in 0 ..< h.len:
     yield h[idx]
 
-proc initBvhNode*(list: HittablesList, start, stop: int): BvhNode
-proc initBvhNode*(list: HittablesList): BvhNode =
-  result = initBvhNode(list, 0, list.len)
+proc initBvhNode*(rnd: var Rand, list: HittablesList, start, stop: int): BvhNode
+proc initBvhNode*(rnd: var Rand, list: HittablesList): BvhNode =
+  result = initBvhNode(rnd, list, 0, list.len)
 
 #proc resize*(h: var HittablesList, newSize: int = 0) =
 #  let newLen = if newSize > 0: newSize
@@ -647,10 +647,10 @@ proc box_y_compare(a, b: Hittable): bool =
 proc box_z_compare(a, b: Hittable): bool =
   result = boxCompare(a, b, 2)
 
-proc initBvhNode*(list: HittablesList, start, stop: int): BvhNode =
+proc initBvhNode*(rnd: var Rand, list: HittablesList, start, stop: int): BvhNode =
   var mlist = list
 
-  let axis = rand(2)
+  let axis = rnd.rand(2)
   var comparator: (proc(a, b: Hittable): bool)
   case axis
   of 0: comparator = box_x_compare
@@ -673,8 +673,8 @@ proc initBvhNode*(list: HittablesList, start, stop: int): BvhNode =
     mlist.sort(start, stop, comparator)
 
     let mid = start + objSpan div 2
-    result.left = Hittable(kind: htBvhNode, hBvhNode: initBvhNode(mlist, start, mid))
-    result.right = Hittable(kind: htBvhNode, hBvhNode: initBvhNode(mlist, mid, stop))
+    result.left = Hittable(kind: htBvhNode, hBvhNode: rnd.initBvhNode(mlist, start, mid))
+    result.right = Hittable(kind: htBvhNode, hBvhNode: rnd.initBvhNode(mlist, mid, stop))
 
   var boxLeft: AABB
   var boxRight: AABB
@@ -767,9 +767,8 @@ proc initBox*(p0, p1: Point, mat: Material): Box =
   result.sides.add initYzRect(p0.y, p1.y, p0.z, p1.z, p1.x, mat)
   result.sides.add initYzRect(p0.y, p1.y, p0.z, p1.z, p0.x, mat)
 
-proc scatter*(l: Lambertian, r_in: Ray, rec: HitRecord,
-              attenuation: var Color, scattered: var Ray): bool =
-  var scatter_direction = rec.normal + randomUnitVector()
+template lambertTargetBody(): untyped {.dirty.} =
+  var scatter_direction = rec.normal + rnd.randomUnitVector()
 
   # catch degenerate scatter direction
   if scatter_direction.nearZero():
@@ -779,10 +778,15 @@ proc scatter*(l: Lambertian, r_in: Ray, rec: HitRecord,
   attenuation = l.albedo
   result = true
 
-proc scatter*(m: Metal, r_in: Ray, rec: HitRecord,
-              attenuation: var Color, scattered: var Ray): bool =
+proc scatter*(m: Lambertian, rnd: var Rand,
+              r_in: Ray, rec: HitRecord,
+              attenuation: var Color, scattered: var Ray): bool {.gcsafe.}  =
+  lambertTargetBody()
+
+proc scatter*(m: Metal, rnd: var Rand, r_in: Ray, rec: HitRecord,
+              attenuation: var Color, scattered: var Ray): bool {.gcsafe.}  =
   var reflected = unitVector(r_in.dir).reflect(rec.normal)
-  scattered = initRay(rec.p, reflected + m.fuzz * randomInUnitSphere())
+  scattered = initRay(rec.p, reflected + m.fuzz * rnd.randomInUnitSphere(), r_in.typ)
   attenuation = m.albedo
   result = scattered.dir.dot(rec.normal) > 0
 
@@ -792,8 +796,10 @@ proc reflectance(cosine, refIdx: float): float =
   r0 = r0 * r0
   result = r0 + (1 - r0) * pow(1 - cosine, 5)
 
-proc scatter*(m: Dielectric, r_in: Ray, rec: HitRecord,
-              attenuation: var Color, scattered: var Ray): bool =
+proc scatter*(m: Dielectric,
+              rnd: var Rand,
+              r_in: Ray, rec: HitRecord,
+              attenuation: var Color, scattered: var Ray): bool {.gcsafe.}  =
   attenuation = color(1.0, 1.0, 1.0)
   let refractionRatio = if rec.frontFace: (1.0 / m.ir) else: m.ir
 
@@ -804,7 +810,7 @@ proc scatter*(m: Dielectric, r_in: Ray, rec: HitRecord,
   let cannotRefract = refraction_ratio * sinTheta > 1.0
   var direction: Vec3d
 
-  if cannotRefract or reflectance(cosTheta, refractionRatio) > rand(1.0):
+  if cannotRefract or reflectance(cosTheta, refractionRatio) > rnd.rand(1.0):
     direction = reflect(unitDirection, rec.normal)
   else:
     direction = refract(unitDirection, rec.normal, refractionRatio)
@@ -812,9 +818,11 @@ proc scatter*(m: Dielectric, r_in: Ray, rec: HitRecord,
   scattered = initRay(rec.p, direction)
   result = true
 
-proc scatter*(m: Material, r_in: Ray, rec: HitRecord,
-              attenuation: var Color, scattered: var Ray): bool =
+proc scatter*(m: Material,
+              rnd: var Rand,
+              r_in: Ray, rec: HitRecord,
+              attenuation: var Color, scattered: var Ray): bool {.gcsafe.} =
   case m.kind
-  of mkLambertian: result = m.mLambertian.scatter(r_in, rec, attenuation, scattered)
-  of mkMetal: result = m.mMetal.scatter(r_in, rec, attenuation, scattered)
-  of mkDielectric: result = m.mDielectric.scatter(r_in, rec, attenuation, scattered)
+  of mkLambertian:    result = m.mLambertian.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkMetal:         result = m.mMetal.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkDielectric:    result = m.mDielectric.scatter(rnd, r_in, rec, attenuation, scattered)
