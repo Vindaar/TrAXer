@@ -773,7 +773,7 @@ proc main(width = 600,
   # Render (image)
   let fname = &"/tmp/render_width_{width}_samplesPerPixel_{samplesPerPixel}.ppm"
   #img.renderMC(fname, world, camera, samplesPerPixel, maxDepth)
-  img.renderSdl(world, camera, samplesPerPixel, maxDepth,
+  img.renderSdl(world, rnd, camera, samplesPerPixel, maxDepth,
                 speed = speed, speedMul = speedMul,
                 numRays = numRays)
 
