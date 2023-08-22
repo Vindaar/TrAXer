@@ -6,6 +6,73 @@ import arraymancer
 
 import sdl2 except Color, Point
 
+type
+  RenderContext = ref object
+    rnd: Rand
+    camera: Camera
+    world: HittablesList
+    worldNoSources: HittablesList ## Copy of the world without any light sources.
+    sources: HittablesList ## List of all light sources
+    targets: HittablesList ## List of all targets for diffuse lights
+    buf: ptr UncheckedArray[uint32]
+    counts: ptr UncheckedArray[int]
+    window: SurfacePtr
+    numRays: int
+    width: int
+    height: int
+    maxDepth: int
+    numPer: int = -1 # only used for multithreaded case
+    numThreads: int = -1 # only used for multithreaded case
+
+  TracingType = enum
+    ttCamera, ttLights
+
+var Tracing = ttCamera
+
+proc initRenderContext(rnd: var Rand,
+                       buf: ptr UncheckedArray[uint32], counts: ptr UncheckedArray[int],
+                       window: SurfacePtr, numRays, width, height: int,
+                       camera: Camera, world: HittablesList, maxDepth: int,
+                       numPer, numThreads: int): RenderContext =
+  var world = world
+  var worldNoSources = world.clone()
+  let sources = worldNoSources.getSources(delete = true)
+  let targets = worldNoSources.getLightTargets(delete = true)
+  # filter invisible targets
+  world.removeInvisibleTargets()
+  result = RenderContext(rnd: rnd,
+                         buf: buf, counts: counts,
+                         window: window,
+                         numRays: numRays, width: width, height: height,
+                         camera: camera,
+                         world: world,
+                         worldNoSources: worldNoSources,
+                         sources: sources,
+                         targets: targets,
+                         maxDepth: maxDepth,
+                         numPer: numPer, numThreads: numThreads)
+
+proc initRenderContext(rnd: var Rand,
+                       buf: var Tensor[uint32], counts: var Tensor[int],
+                       window: SurfacePtr, numRays, width, height: int,
+                       camera: Camera, world: HittablesList, maxDepth: int,
+                       numPer: int = -1, numThreads: int = -1): RenderContext =
+  let bufP    = cast[ptr UncheckedArray[uint32]](buf.unsafe_raw_offset())
+  var countsP = cast[ptr UncheckedArray[int]](counts.unsafe_raw_offset())
+  result = initRenderContext(rnd, bufP, countsP, window, numRays, width, height, camera, world, maxDepth, numPer, numThreads)
+
+proc initRenderContexts(numThreads: int,
+                        buf: var Tensor[uint32], counts: var Tensor[int],
+                        window: SurfacePtr, numRays, width, height: int,
+                        camera: Camera, world: HittablesList, maxDepth: int): seq[RenderContext] =
+  result = newSeq[RenderContext](numThreads)
+  let numPer = (width * height) div numThreads
+  for i in 0 ..< numThreads:
+    let bufP    = cast[ptr UncheckedArray[uint32]](buf.unsafe_raw_offset()[i * numPer].addr)
+    let countsP = cast[ptr UncheckedArray[int]](counts.unsafe_raw_offset()[i * numPer].addr)
+    ## XXX: clone world?
+    var rnd = initRand(i * 0xfafe)
+    result[i] = initRenderContext(rnd, bufP, countsP, window, numRays, width, height, camera.clone(), world.clone(), maxDepth, numPer, numThreads)
 when compileOption("threads"):
   import weave
 var THREADS = 16
@@ -30,6 +97,52 @@ proc rayColor*(c: Camera, rnd: var Rand, r: Ray, world: HittablesList, depth: in
     let t = 0.5 * (unitDirection.y + 1.0)
     result = (1.0 - t) * color(1.0, 1.0, 1.0) + t * color(0.5, 0.7, 1.0)
 
+proc rayColorAndPos*(c: Camera, rnd: var Rand, r: Ray, initialColor: Color, world: HittablesList, depth: int): (Color, float, float) {.gcsafe.} =
+  var rec: HitRecord
+
+  echo "Start==============================\n\n"
+  proc recurse(rec: var HitRecord, c: Camera, rnd: var Rand, r: Ray, world: HittablesList, depth: int): Color =
+    echo "Depth = ", depth
+    if depth <= 0:
+      return color(0, 0, 0)
+
+    #var color: Color = initialColor
+    result = initialColor
+    if world.hit(r, 0.001, Inf, rec):
+      #echo "Hit: ", rec.p, " mat: ", rec.mat, " at depth = ", depth, " rec: ", rec
+      var scattered: Ray
+      var attenuation: Color
+      var emitted = rec.mat.emit(rec.u, rec.v, rec.p)
+      if rec.mat.kind == mkImageSensor:
+        result = color(1,1,1) ## Here we return 1 so that the function call above terminates correctly
+        discard
+      elif not rec.mat.scatter(rnd, r, rec, attenuation, scattered):
+        result = emitted
+      else:
+        let angle = arccos(scattered.dir.dot(rec.normal)).radToDeg
+        echo "Scattering angle : ", angle
+        result = attenuation * recurse(rec, c, rnd, scattered, world, depth - 1) + emitted
+        #let res =
+        #if rec.mat.kind == mkImageSensor:
+        #
+        #else:
+        #  result = attenuation * res + emitted
+    else:
+      result = c.background
+
+  let color = recurse(rec, c, rnd, r, world, depth)
+  echo "------------------------------Finish\n\n"
+  if rec.mat.kind == mkImageSensor: # and color != initialColor:
+    ## In this case return color and position
+    echo "Initial color? ", color, " rec.mat: ", rec.mat, " at ", (rec.u, rec.v)
+    result = (color, rec.u, rec.v)
+  else: # else just return nothing
+    result = (color(0,0,0), 0, 0)
+
+  when false: ## Old code with background gradient
+    let unitDirection = unitVector(r.dir)
+    let t = 0.5 * (unitDirection.y + 1.0)
+    result = (1.0 - t) * color(1.0, 1.0, 1.0) + t * color(0.5, 0.7, 1.0)
 
 
 proc writeColor*(f: File, color: Color, samplesPerPixel: int) =
@@ -117,50 +230,147 @@ proc renderMC*(img: Image, f: string,
       f.writeColor(buf[j, i], counts[j, i])
   f.close()
 
-proc renderSdlFrame(buf: var Tensor[uint32], counts: var Tensor[int],
-                    window: SurfacePtr, numRays, width, height: int,
-                    camera: Camera, world: HittablesList, maxDepth: int) =
+proc sampleRay(rnd: var Rand, sources, targets: HittablesList): (Ray, Color) {.gcsafe.} =
+  ## Sample a ray from one of the sources
+  # 1. pick a sources
+  let num = sources.len
+  let idx = if num == 1: 0 else: rnd.rand(num - 1) ## XXX: For now uniform sampling between sources!
+  let source = sources[idx]
+  # 2. sample from source
+  let p = samplePoint(source, rnd)
+  # 3. get the color of the source
+  let initialColor = source.getMaterial.emit(0.5, 0.5, p)
+
+  # 4. depending on the source material choose direction
+  case source.getMaterial.kind
+  of mkLaser: # lasers just sample along the normal of the material
+    let dir = vec3(0.0, 0.0, -1.0) ## XXX: make this the normal surface!
+    result = (initRay(p, dir, rtLight), initialColor)
+  of mkDiffuseLight, mkSolarEmission: # diffuse light need a target
+    let numT = targets.len
+    if numT == 0:
+      raise newException(ValueError, "There must be at least one target for diffuse lights.")
+    let idxT = if numT == 1: 0 else: rnd.rand(numT - 1)
+    let target = targets[idxT]
+    let targetP = target.samplePoint(rnd)
+    let dir = normalize(targetP - p)
+    # For diffuse lights we propagate the ray *towards the target*
+    # and place it 1 before it. This is to avoid issues with ray intersections
+    # if the source is _very far_ away from the target.
+    #echo "Initial origin: ", p
+    var ray = initRay(p, dir, rtLight)
+    ray.orig = ray.at((targetP - p).length() - 1.0)
+    result = (ray, initialColor)
+
+    when false:# true:
+      block SanityCheck: # Check the produced ray actually hits the target
+        var rec: HitRecord
+        if not targets.hit(result[0], 0.001, Inf, rec):
+          doAssert false, "Sampled ray does not hit our target! " & $result
+  else: doAssert false, "Not a possible branch, these materials are not sources."
+
+  #echo "Sampled ray has angle to z axis: ", arccos(vec3(0.0,0.0,1.0).dot(result[0].dir)).radToDeg, " ray: ", result[0]
+
+proc renderSdlFrame(ctx: RenderContext) =
   var idx = 0
-  while idx < numRays:
-    let x = rand(width)
-    let y = rand(height)
-    #if x.int >= window.w: continue
-    #if y.int >= window.h: continue
-    let r = camera.getRay(x, y)
-    let color = rayColor(r, world, maxDepth)
-    let yIdx = height - y - 1
-    let xIdx = x
-    counts[yIdx, xIdx] = counts[yIdx, xIdx] + 1
-    let curColor = buf[yIdx, xIdx].toColor
-    let delta = (color.gammaCorrect - curColor) / counts[yIdx, xIdx].float
+  let
+    width = ctx.width
+    height = ctx.height
+    maxDepth = ctx.maxDepth
+    camera = ctx.camera
+
+  while idx < ctx.numRays:
+    var
+      yIdx: int
+      xIdx: int
+      color: Color
+    case Tracing
+    of ttCamera:
+      let x = ctx.rnd.rand(width - 1)
+      let y = ctx.rnd.rand(height - 1)
+      #if x.int >= window.w: continue
+      #if y.int >= window.h: continue
+      let r = camera.getRay(ctx.rnd, x, y)
+      color = camera.rayColor(ctx.rnd, r, ctx.world, maxDepth)
+      yIdx = y #height - y - 1
+      xIdx = x
+    of ttLights:
+      # 1. get a ray from a source
+      let (r, initialColor) = ctx.rnd.sampleRay(ctx.sources, ctx.targets)
+      # 2. trace it. Check if ray ended up on `ImageSensor`
+      let (c, u, v) = camera.rayColorAndPos(ctx.rnd, r, initialColor, ctx.world, maxDepth)
+      if c.r == 0 and c.g == 0 and c.b == 0: continue # skip to next ray!
+      #echo r
+      #echo "empty?? ", c, " at ", (u, v)
+
+      # 3. if so, get the relative position on sensor, map to x/y
+      color = c
+      xIdx = clamp((u * (width.float - 1.0)).round.int, 0, width)
+      yIdx = clamp((v * (height.float - 1.0)).round.int, 0, height)
+
+    when true:
+      # 1. get a ray from a source
+      for _ in 0 ..< 1:
+        let (r, initialColor) = ctx.rnd.sampleRay(ctx.sources, ctx.targets)
+        # 2. trace it
+        let c = camera.rayColor(ctx.rnd, r, ctx.worldNoSources, maxDepth)
+        # this color itself is irrelevant, but might illuminate the image sensor!
+
+    let bufIdx = yIdx * height + xIdx
+    ctx.counts[bufIdx] = ctx.counts[bufIdx] + 1
+    let curColor = ctx.buf[bufIdx].toColor
+    let delta = (color.gammaCorrect - curColor) / ctx.counts[bufIdx].float
     let newColor = curColor + delta
     let cu8 = toColorU8(newColor)
-    let sdlColor = sdl2.mapRGB(window.format, cu8.r.byte, cu8.g.byte, cu8.b.byte)
-    buf[yIdx, xIdx] = sdlColor
+    let sdlColor = sdl2.mapRGB(ctx.window.format, cu8.r.byte, cu8.g.byte, cu8.b.byte)
+    ctx.buf[bufIdx] = sdlColor
     inc idx
 
-proc renderFrame(j: int, buf: ptr UncheckedArray[uint32],
-                 counts: ptr UncheckedArray[int],
-                 window: SurfacePtr, numPer, numRays, width, height: int,
-                 camera: Camera, world: HittablesList, maxDepth: int) =
+proc renderFrame(j: int, ctx: ptr RenderContext) {.gcsafe.} =
+  let ctx = ctx[]
+  let
+    width = ctx.width
+    height = ctx.height
+    maxDepth = ctx.maxDepth
+    camera = ctx.camera
+    numPer = ctx.numPer
   let frm = numPer * j
-  let to = if j == THREADS: width * height - 1 else: numPer * (j + 1) - 1
+
+  ## XXX: I removed the `-1` in the `else` branch, check!
+  ## -> Seems to have fixed the 'empty pixels'
+  let to = if j == ctx.numThreads: width * height - 1 else: numPer * (j + 1) # - 1
   var j = 0
-  while j < numRays:
-    let idx = rand(frm.float .. to.float)
+  while j < ctx.numRays:
+    let idx = ctx.rnd.rand(frm.float .. to.float)
     let x = idx mod width.float
     let y = idx.float / width.float
     #if x.int >= window.w: continue
     #if y.int >= window.h: continue
-    let r = camera.getRay(x.int, y.int)
-    let color = rayColor(r, world, maxDepth)
-    counts[idx.int - frm] = counts[idx.int - frm] + 1
-    let curColor = buf[idx.int - frm].toColor
-    let delta = (color.gammaCorrect - curColor) / counts[idx.int - frm].float
+    let r = camera.getRay(ctx.rnd, x.int, y.int)
+    let color = camera.rayColor(ctx.rnd, r, ctx.world, maxDepth)
+
+    block LightSources:
+      # 1. get a ray from a source
+      for _ in 0 ..< 1:
+        let (r, initialColor) = ctx.rnd.sampleRay(ctx.sources, ctx.targets)
+        # 2. trace it
+        let c = camera.rayColor(ctx.rnd, r, ctx.worldNoSources, maxDepth)
+        # this color itself is irrelevant, but might illuminate the image sensor!
+
+    ctx.counts[idx.int - frm] = ctx.counts[idx.int - frm] + 1
+    let curColor = ctx.buf[idx.int - frm].toColor
+    let delta = (color.gammaCorrect - curColor) / ctx.counts[idx.int - frm].float
     let newColor = curColor + delta
     let cu8 = toColorU8(newColor)
-    let sdlColor = sdl2.mapRGB(window.format, cu8.r.byte, cu8.g.byte, cu8.b.byte)
-    buf[idx.int - frm] = sdlColor
+    if false:# delta.r > 0.0 or delta.g > 0.0 or delta.b > 0.0 or curColor.r > 0 or curColor.g > 0 or curColor.b > 0:
+      echo "curColor = ", curColor
+      echo "color = ", color, " gamma corrected: ", color.gammaCorrect
+      echo "Delta = ", delta
+      echo "New = ", curColor + delta
+      echo "Cu8 = ", cu8
+      echo "\n"
+    let sdlColor = sdl2.mapRGB(ctx.window.format, cu8.r.byte, cu8.g.byte, cu8.b.byte)
+    ctx.buf[idx.int - frm] = sdlColor
     inc j
 
 proc copyBuf(bufT: Tensor[uint32], window: SurfacePtr) =
@@ -173,6 +383,10 @@ proc copyBuf(bufT: Tensor[uint32], window: SurfacePtr) =
     for y in 0 ..< surf.shape[0]:
       for x in 0 ..< surf.shape[1]:
         surf[y, x] = bufT[y, x]
+
+proc updateCamera(ctxs: var seq[RenderContext], camera: Camera) =
+  for ctx in mitems(ctxs):
+    ctx.camera = clone(camera)
 
 proc renderSdl*(img: Image, world: var HittablesList,
                 rnd: var Rand, # the *main thread* RNG
@@ -221,12 +435,12 @@ proc renderSdl*(img: Image, world: var HittablesList,
   var lastLookFrom: Point
 
   when compileOption("threads"):
-    let numPer = (img.width * img.height) div THREADS
-    var ptrSeq = newSeq[ptr UncheckedArray[uint32]](THREADS)
-    var ctsSeq = newSeq[ptr UncheckedArray[int]](THREADS)
-    for i in 0 ..< THREADS:
-      ptrSeq[i] = cast[ptr UncheckedArray[uint32]](bufT.unsafe_raw_offset()[i * numPer].addr)
-      ctsSeq[i] = cast[ptr UncheckedArray[int]](counts.unsafe_raw_offset()[i * numPer].addr)
+    var ctxSeq = initRenderContexts(THREADS,
+                                    bufT, counts, window, numRays, width, height, camera, world, maxDepth)
+
+  else:
+    let ctx = initRenderContext(rnd, bufT, counts, window, numRays, width, height, camera, world, maxDepth)
+
   while not quit:
     while pollEvent(event):
       case event.kind
@@ -340,25 +554,20 @@ proc renderSdl*(img: Image, world: var HittablesList,
 
     ## rendering of this frame
     when not compileOption("threads"):
-      let width = img.width
-      let height = img.height
-      renderSdlFrame(bufT, counts, window, numRays, width, height, camera, world, maxDepth)
+      renderSdlFrame(ctx)
       copyBuf(bufT, window)
     else:
       ## TODO: replace this by a long running background service to which we submit
       ## jobs and the await them? So we don't have the overhead!
-      var cSeq = newSeq[Camera](THREADS)
-      for i in 0 ..< THREADS:
-        cSeq[i] = clone(camera)
-
       if camera.lookFrom != lastLookFrom:
         echo "[INFO] Current position (lookFrom) = ", camera.lookFrom
         lastLookFrom = camera.lookFrom
       init(Weave)
       parallelFor j in 0 ..< THREADS:
-        captures: {ptrSeq, ctsSeq, window, numPer, numRays, width, height, cSeq, world, maxDepth}
-        renderFrame(j, ptrSeq[j], ctsSeq[j], window, numPer, numRays, width, height, cSeq[j], world, maxDepth)
+        captures: {ctxSeq}
+        renderFrame(j, ctxSeq[j])
       exit(Weave)
+      ctxSeq.updateCamera(camera)
       copyBuf(bufT, window)
 
     unlockSurface(window)
