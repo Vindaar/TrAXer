@@ -1,5 +1,7 @@
 import basetypes, math, aabb, algorithm, random
 
+import sensorBuf
+
 type
   Transform* = Mat4d
 
@@ -83,15 +85,58 @@ type
   AnyHittable* = Sphere | Cylinder | Cone | BvhNode | XyRect | XzRect | YzRect | Box | Disk
 
   MaterialKind* = enum
-    mkLambertian, mkMetal, mkDielectric
+    mkLambertian, mkMetal, mkDielectric, mkDiffuseLight, mkSolarEmission, mkLaser, mkImageSensor, mkLightTarget
   Material* = object
     case kind*: MaterialKind
-    of mkLambertian: mLambertian: Lambertian
+    of mkLambertian: mLambertian*: Lambertian
     of mkMetal: mMetal: Metal
     of mkDielectric: mDielectric: Dielectric
+    of mkDiffuseLight: mDiffuseLight: DiffuseLight
+    of mkSolarEmission: mSolarEmission: SolarEmission
+    of mkLaser: mLaser: Laser
+    of mkImageSensor: mImageSensor*: ImageSensor
+    of mkLightTarget: mLightTarget*: LightTarget
+
+  TextureKind* = enum
+    tkSolid, tkChecker#, tkAbsorbentTexture
+
+  Texture* {.acyclic.} = ref object
+    case kind*: TextureKind
+    of tkSolid: tSolid: SolidTexture
+    of tkChecker: tChecker: CheckerTexture
+
+  SolidTexture* {.acyclic.} = ref object
+    color*: Color
+
+  CheckerTexture* {.acyclic.} = ref object
+    invScale*: float
+    even*: Texture
+    odd*: Texture
+
+  DiffuseLight* = object
+    emit*: Texture
+
+  SolarEmission* = object
+    emit*: Texture ## The color used for the regular light source
+    fluxRadiusCDF*: seq[float] ## The relative emission for each radius as a CDF
+
+  ImageSensor* = object
+    sensor*: Sensor2D
+
+  ## A `LightTarget` is a material assigned to any `Hittable`, which will be used to sample rays from
+  ## `DiffuseLight` sources. Any `DiffuseLight` will sample rays towards the surface of the `Hittable`
+  ## of `LightTarget`.
+  LightTarget* = object
+    visible*: bool # Whether it is visible for the Camera based rays
+    albedo*: Texture # The texture is only relevant for the Camera based rays to visualize it.
+
+  ## If a `Laser` is applied to an object, it means the entire surface emits alnog the normal. I.e.
+  ## this produces parallel light if emitting from a disk (for the Sun!)
+  Laser* = object
+    emit*: Texture
 
   Lambertian* = object
-    albedo*: Color
+    albedo*: Texture
 
   Metal* = object
     albedo*: Color
@@ -100,11 +145,34 @@ type
   Dielectric* = object
     ir*: float # refractive index (could use `eta`)
 
-#proc `=destroy`*(h: var HittablesList) =
-#  deallocShared(h.data)
-#  h.data = nil
-#  h.len = 0
+  AnyMaterial* = Lambertian | Metal | Dielectric | DiffuseLight | Laser | SolarEmission | Dielectric | ImageSensor | LightTarget
 
+proc value*(s: Texture, u, v: float, p: Point): Color {.gcsafe.}
+
+proc solidColor*(c: Color): SolidTexture = SolidTexture(color: c)
+proc solidColor*(r, g, b: float): SolidTexture = SolidTexture(color: color(r, g, b))
+proc value*(s: SolidTexture, u, v: float, p: Point): Color = s.color # Is solid everywhere after all
+
+proc toTexture*(x: Color): Texture = Texture(kind: tkSolid, tSolid: solidColor(x))
+proc toTexture*(x: SolidTexture): Texture = Texture(kind: tkSolid, tSolid: x)
+proc toTexture*(x: CheckerTexture): Texture = Texture(kind: tkChecker, tChecker: x)
+
+proc checkerTexture*(scale: float, even, odd: Texture): CheckerTexture = CheckerTexture(invScale: 1.0 / scale, even: even, odd: odd)
+proc checkerTexture*(scale: float, c1, c2: Color): CheckerTexture =
+  result = CheckerTexture(invScale: 1.0 / scale, even: toTexture(c1), odd:  toTexture(c2))
+
+proc value*(s: CheckerTexture, u, v: float, p: Point): Color =
+  ## Return the color of the checker board at the u, v coordinates and `p`
+  let xInt = floor(s.invScale * p.x).int
+  let yInt = floor(s.invScale * p.y).int
+  let zInt = floor(s.invScale * p.z).int
+  let isEven = (xInt + yInt + zInt) mod 2 == 0
+  result = if isEven: s.even.value(u, v, p) else: s.odd.value(u, v, p)
+
+proc value*(s: Texture, u, v: float, p: Point): Color {.gcsafe.} =
+  case s.kind
+  of tkSolid:   result = s.tSolid.value(u, v, p)
+  of tkChecker: result = s.tChecker.value(u, v, p)
 
 proc initHittables*(size: int = 8): HittablesList =
   ## allocates memory for `size`, but remains empty
@@ -669,8 +737,20 @@ proc initBvhNode*(rnd: var Rand, list: HittablesList, start, stop: int): BvhNode
 
   result.box = surroundingBox(boxLeft, boxRight)
 
+proc initDiffuseLight*(a: Color): DiffuseLight =
+  result = DiffuseLight(emit: toTexture(a))
+
+proc initSolarEmission*(a: Color, fluxRadiusCDF: seq[float]): SolarEmission =
+  result = SolarEmission(emit: toTexture(a), fluxRadiusCDF: fluxRadiusCDF)
+
+proc initLaser*(a: Color): Laser =
+  result = Laser(emit: toTexture(a))
+
 proc initLambertian*(a: Color): Lambertian =
-  result = Lambertian(albedo: a)
+  result = Lambertian(albedo: toTexture(a))
+
+proc initLambertian*(t: Texture): Lambertian =
+  result = Lambertian(albedo: t)
 
 proc initMetal*(a: Color, f: float): Metal =
   result = Metal(albedo: a, fuzz: f)
@@ -678,13 +758,21 @@ proc initMetal*(a: Color, f: float): Metal =
 proc initDielectric*(ir: float): Dielectric =
   result = Dielectric(ir: ir)
 
-proc initMaterial*[T](m: T): Material =
-  when T is Lambertian:
-    result = Material(kind: mkLambertian, mLambertian: m)
-  elif T is Metal:
-    result = Material(kind: mkMetal, mMetal: m)
-  else:
-    result = Material(kind: mkDielectric, mDielectric: m)
+proc initImageSensor*(width, height: int): ImageSensor =
+  result = ImageSensor(sensor: initSensor(width, height))
+
+proc initLightTarget*(a: Color, visible: bool): LightTarget =
+  result = LightTarget(albedo: toTexture(a), visible: visible)
+
+proc toMaterial*(m: Lambertian): Material = Material(kind: mkLambertian, mLambertian: m)
+proc toMaterial*(m: Metal): Material = Material(kind: mkMetal, mMetal: m)
+proc toMaterial*(m: Dielectric): Material = Material(kind: mkDielectric, mDielectric: m)
+proc toMaterial*(m: DiffuseLight): Material = Material(kind: mkDiffuseLight, mDiffuseLight: m)
+proc toMaterial*(m: SolarEmission): Material = Material(kind: mkSolarEmission, mSolarEmission: m)
+proc toMaterial*(m: Laser): Material = Material(kind: mkLaser, mLaser: m)
+proc toMaterial*(m: ImageSensor): Material = Material(kind: mkImageSensor, mImageSensor: m)
+proc toMaterial*(m: LightTarget): Material = Material(kind: mkLightTarget, mLightTarget: m)
+template initMaterial*[T: AnyMaterial](m: T): Material = m.toMaterial()
 
 proc initSphere*(center: Point, radius: float, mat: Material): Sphere =
   result = Sphere(radius: radius, mat: mat)
@@ -758,14 +846,22 @@ template lambertTargetBody(): untyped {.dirty.} =
   if scatter_direction.nearZero():
     scatter_direction = rec.normal
 
-  scattered = initRay(rec.p, scatter_direction)
-  attenuation = l.albedo
+  scattered = initRay(rec.p, scatter_direction, r_in.typ)
+  attenuation = m.albedo.value(rec.u, rec.v, rec.p)
   result = true
 
 proc scatter*(m: Lambertian, rnd: var Rand,
               r_in: Ray, rec: HitRecord,
               attenuation: var Color, scattered: var Ray): bool {.gcsafe.}  =
   lambertTargetBody()
+
+proc scatter*(m: LightTarget, rnd: var Rand,
+              r_in: Ray, rec: HitRecord,
+              attenuation: var Color, scattered: var Ray): bool {.gcsafe.}  =
+  ## Scatters light like a Lambertian if it's set to be visible and the incoming ray
+  ## comes from the `Camera`.
+  if m.visible and r_in.typ == rtCamera:
+    lambertTargetBody()
 
 proc scatter*(m: Metal, rnd: var Rand, r_in: Ray, rec: HitRecord,
               attenuation: var Color, scattered: var Ray): bool {.gcsafe.}  =
@@ -802,6 +898,23 @@ proc scatter*(m: Dielectric,
   scattered = initRay(rec.p, direction)
   result = true
 
+type
+  NonEmittingMaterials* = Lambertian | Metal | Dielectric | LightTarget
+  EmittingMaterials* = DiffuseLight | Laser | ImageSensor
+
+proc scatter*[T: DiffuseLight | Laser | SolarEmission](
+  m: T,
+  rnd: var Rand,
+  r_in: Ray, rec: HitRecord,
+  attenuation: var Color, scattered: var Ray
+                                                     ): bool {.gcsafe.} =
+  ## Diffuse lights, lasers and solare emissions do not scatter!
+  result = false
+
+proc scatter*(m: ImageSensor, rnd: var Rand, r_in: Ray, rec: HitRecord,
+              attenuation: var Color, scattered: var Ray): bool {.gcsafe.} =
+  ## An image sensor is a perfect sink! (At least we assume so)
+  result = false
 proc scatter*(m: Material,
               rnd: var Rand,
               r_in: Ray, rec: HitRecord,
@@ -810,3 +923,28 @@ proc scatter*(m: Material,
   of mkLambertian:    result = m.mLambertian.scatter(rnd, r_in, rec, attenuation, scattered)
   of mkMetal:         result = m.mMetal.scatter(rnd, r_in, rec, attenuation, scattered)
   of mkDielectric:    result = m.mDielectric.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkDiffuseLight:  result = m.mDiffuseLight.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkSolarEmission: result = m.mSolarEmission.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkLaser:         result = m.mLaser.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkImageSensor:   result = m.mImageSensor.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkLightTarget:   result = m.mLightTarget.scatter(rnd, r_in, rec, attenuation, scattered)
+
+proc emit*[T: NonEmittingMaterials](m: T, u, v: float, p: Point): Color =
+  ## Materials that don't emit just return black!
+  result = color(0, 0, 0)
+
+proc emit*[T: DiffuseLight | Laser | SolarEmission](m: T, u, v: float, p: Point): Color =
+  result = m.emit.value(u, v, p)
+
+proc emit*(m: ImageSensor, u, v: float, p: Point): Color = discard
+proc emit*(m: Material, u, v: float, p: Point): Color =
+  case m.kind
+  of mkLambertian:    result = m.mLambertian.emit(u, v, p)
+  of mkMetal:         result = m.mMetal.emit(u, v, p)
+  of mkDielectric:    result = m.mDielectric.emit(u, v, p)
+  of mkDiffuseLight:  result = m.mDiffuseLight.emit(u, v, p)
+  of mkSolarEmission: result = m.mSolarEmission.emit(u, v, p)
+  of mkLaser:         result = m.mLaser.emit(u, v, p)
+  of mkImageSensor:   result = m.mImageSensor.emit(u, v, p)
+  of mkLightTarget:   result = m.mLightTarget.emit(u, v, p)
+
