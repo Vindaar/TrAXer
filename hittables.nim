@@ -204,23 +204,23 @@ proc setFaceNormal*(rec: var HitRecord, r: Ray, outward_normal: Vec3d) =
   rec.frontFace = r.dir.dot(outward_normal) < 0
   rec.normal = if rec.frontFace: outward_normal else: -outward_normal
 
-proc hit*(h: Hittable, r: Ray, t_min, t_max: float, rec: var HitRecord): bool {.gcsafe.}
-proc hit*(n: BvhNode, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
-  if not n.box.hit(r, t_min, t_max):
+proc hit*(h: Hittable, r: Ray, tMin, tMax: float, rec: var HitRecord): bool {.gcsafe.}
+proc hit*(n: BvhNode, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
+  if not n.box.hit(r, tMin, tMax):
     return false
 
-  let hitLeft = n.left.hit(r, t_min, t_max, rec)
-  let hitRight = n.right.hit(r, t_min, if hitLeft: rec.t else: t_max, rec)
+  let hitLeft = n.left.hit(r, tMin, tMax, rec)
+  let hitRight = n.right.hit(r, tMin, if hitLeft: rec.t else: tMax, rec)
 
   result = hitLeft or hitRight
 
-proc hit*(h: HittablesList, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
+proc hit*(h: HittablesList, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   var tmpRec: HitRecord
   result = false
-  var closestSoFar = t_max
+  var closestSoFar = tMax
 
   for obj in h:
-    if obj.hit(r, t_min, closestSoFar, tmpRec):
+    if obj.hit(r, tMin, closestSoFar, tmpRec):
       result = true
       closestSoFar = tmpRec.t
       rec = tmpRec
@@ -245,7 +245,7 @@ proc solveQuadratic*(a, b, c: float, t0, t1: var float): bool =
   if t0 > t1: swap(t0, t1)
   result = true
 
-proc hit*(s: Sphere, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
+proc hit*(s: Sphere, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   let oc = r.orig
 
   let a = r.dir.length_squared()
@@ -259,9 +259,9 @@ proc hit*(s: Sphere, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
 
   # find nearest root that lies in acceptable range
   var root = (-half_b - sqrtd) / a
-  if root < t_min or t_max < root:
+  if root < tMin or tMax < root:
     root = (-half_b + sqrtd) / a
-    if root < t_min or t_max < root:
+    if root < tMin or tMax < root:
       return false
 
   rec.t = root
@@ -277,7 +277,7 @@ proc hit*(s: Sphere, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
 
   result = true
 
-proc hit*(cyl: Cylinder, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
+proc hit*(cyl: Cylinder, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   ## Initialize ray coordinate values
   let a = r.dir.x * r.dir.x + r.dir.y * r.dir.y
   let b = 2.0 * (r.dir.x * r.orig.x + r.dir.y * r.orig.y)
@@ -341,7 +341,7 @@ proc hit*(cyl: Cylinder, r: Ray, t_min, t_max: float, rec: var HitRecord): bool 
 
   result = true
 
-proc hit*(con: Cone, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
+proc hit*(con: Cone, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   ## Initialize ray coordinate values
   var k = (con.radius / con.height)^2
   let a = r.dir.x * r.dir.x + r.dir.y * r.dir.y - k * r.dir.z * r.dir.z
@@ -481,8 +481,8 @@ proc hit*(rect: YzRect, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   rec.p = r.at(t)
   result = true
 
-proc hit*(box: Box, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
-  result = box.sides.hit(r, t_min, t_max, rec)
+proc hit*(box: Box, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
+  result = box.sides.hit(r, tMin, tMax, rec)
 
 template transforms(name, field: untyped): untyped =
   proc `name`*(h: Hittable, v: Vec3d): Vec3d =
@@ -517,20 +517,20 @@ proc invertNormal*(h: Hittable, n: Vec3d): Vec3d =
   #mh.trans = h.trans.inverse() #.transpose()
   result = h.inverseTransform(n)  #mh.transform(n)
 
-proc hit*(h: Hittable, r: Ray, t_min, t_max: float, rec: var HitRecord): bool {.gcsafe.} =
+proc hit*(h: Hittable, r: Ray, tMin, tMax: float, rec: var HitRecord): bool {.gcsafe.} =
   # 1. transform to object space
   let rOb = h.transform(r)
   # 2. compute the hit
   case h.kind
-  of htSphere:   result = h.hSphere.hit(rOb, t_min, t_max, rec)
-  of htCylinder: result = h.hCylinder.hit(rOb, t_min, t_max, rec)
-  of htCone:     result = h.hCone.hit(rOb, t_min, t_max, rec)
-  of htDisk:     result = h.hDisk.hit(rOb, t_min, t_max, rec)
-  of htBvhNode:  result = h.hBvhNode.hit(rOb, t_min, t_max, rec)
-  of htXyRect:   result = h.hXyRect.hit(rOb, t_min, t_max, rec)
-  of htXzRect:   result = h.hXzRect.hit(rOb, t_min, t_max, rec)
-  of htYzRect:   result = h.hYzRect.hit(rOb, t_min, t_max, rec)
-  of htBox:      result = h.hBox.hit(rOb, t_min, t_max, rec)
+  of htSphere:   result = h.hSphere.hit(rOb, tMin, tMax, rec)
+  of htCylinder: result = h.hCylinder.hit(rOb, tMin, tMax, rec)
+  of htCone:     result = h.hCone.hit(rOb, tMin, tMax, rec)
+  of htDisk:     result = h.hDisk.hit(rOb, tMin, tMax, rec)
+  of htBvhNode:  result = h.hBvhNode.hit(rOb, tMin, tMax, rec)
+  of htXyRect:   result = h.hXyRect.hit(rOb, tMin, tMax, rec)
+  of htXzRect:   result = h.hXzRect.hit(rOb, tMin, tMax, rec)
+  of htYzRect:   result = h.hYzRect.hit(rOb, tMin, tMax, rec)
+  of htBox:      result = h.hBox.hit(rOb, tMin, tMax, rec)
   # 3. convert rec back to world space
   ## XXX: normal transformation in general more complex!
   ## `pbrt` uses `mInv` for *FORWARD* transformation!
