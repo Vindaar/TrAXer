@@ -35,6 +35,7 @@ type
     t*: float
     frontFace*: bool
     mat*: Material
+    u*, v*: float
 
   Sphere* = object
     radius*: float
@@ -301,6 +302,11 @@ proc hit*(s: Sphere, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
   rec.t = root
   rec.p = r.at(rec.t)
   let outward_normal = (rec.p) / s.radius
+
+  let theta = arccos(-outward_normal.y)
+  let phi = arctan2(-outward_normal.z, outward_normal.x) + PI
+  rec.u = phi / (2*PI)
+  rec.v = theta / PI
   rec.setFaceNormal(r, outward_normal.Vec3d)
   rec.mat = s.mat
 
@@ -359,6 +365,9 @@ proc hit*(cyl: Cylinder, r: Ray, t_min, t_max: float, rec: var HitRecord): bool 
   let dpdu = vec3(-cyl.phiMax * pHit.y, cyl.phiMax * pHit.x, 0.0)
   let dpdv = vec3(0.0, 0.0, cyl.zMax - cyl.zMin)
 
+  rec.u = u
+  rec.v = v
+
   rec.t = tShapeHit
   rec.p = r.at(rec.t)
   let outward_normal = normalize(cross(dpdu, dpdv)) #(rec.p) / s.radius
@@ -408,7 +417,9 @@ proc hit*(con: Cone, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
 
   # Compute cone $\dpdu$ and $\dpdv$
   let dpdu = vec3(-con.phiMax * pHit.y, con.phiMax * pHit.x, 0.0)
-  let dpdv = vec3(-pHit.x / (1.0 - v), -pHit.y / (1.0 - v), (con.height))
+  let dpdv = vec3(-pHit.x / (1.0 - v), -pHit.y / (1.0 - v), con.height)
+  rec.u = u
+  rec.v = v
 
   rec.t = tShapeHit
   rec.p = r.at(rec.t)
@@ -418,36 +429,52 @@ proc hit*(con: Cone, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
 
   result = true
 
-proc hit*(d: Disk, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
+
+proc hit*(d: Disk, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   let t = (d.distance - r.orig.z) / r.dir.z
-  if t < t_min or t > t_max:
-    return false
+  if t < tMin or t > tMax: return false
   if r.dir.z == 0.0:
     # ray is parallel to disk
     return false
-  let pHit = r.at(t)
+  var pHit = r.at(t)
   let dist = pHit.x * pHit.x + pHit.y * pHit.y
 
-  if dist > (d.radius * d.radius):
-    return false
+  if dist > (d.radius * d.radius) or dist < (d.innerRadius * d.innerRadius): return false
+
+  # Test disk $\phi$ value against $\phimax$
+  var phi = arctan2(pHit.y, pHit.x)
+  if phi < 0: phi += 2 * PI
+  if phi > d.phiMax: return false
+
+  # Find parametric representation of disk hit
+  let u = phi / d.phiMax
+  let rHit = sqrt(dist)
+  let v = (d.radius - rHit) / (d.radius - d.innerRadius)
+
+  ## XXX: compute normal from dpdu x dpdv?
+  #let dpdu = vec3(-phiMax * pHit.y, phiMax * pHit.x, 0)
+  #let dpdv = vec3(pHit.x, pHit.y, 0.0) * (d.innerRadius - d.radius) / rHit
   rec.t = t
   rec.p = r.at(rec.t)
   let outward_normal = vec3(0.0, 0.0, 1.0)
   rec.setFaceNormal(r, outward_normal.Vec3d)
   rec.mat = d.mat
 
+  rec.u = u
+  rec.v = v
+
   result = true
 
-proc hit*(rect: XyRect, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
+proc hit*(rect: XyRect, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   let t = (rect.k - r.orig.z) / r.dir.z
-  if t < t_min or t > t_max:
+  if t < tMin or t > tMax:
     return false
   let x = r.orig.x + t * r.dir.x
   let y = r.orig.y + t * r.dir.y
   if x < rect.x0 or x > rect.x1 or y < rect.y0 or y > rect.y1:
     return false
-  #rec.u = (x - rect.x0) / (rect.x1 - rect.x0)
-  #rec.v = (y - rect.y0) / (rect.y1 - rect.y0)
+  rec.u = (x - rect.x0) / (rect.x1 - rect.x0)
+  rec.v = (y - rect.y0) / (rect.y1 - rect.y0)
   rec.t = t
   let outward_normal = vec3(0.0, 0.0, 1.0)
   rec.setFaceNormal(r, outward_normal)
@@ -455,16 +482,16 @@ proc hit*(rect: XyRect, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
   rec.p = r.at(t)
   result = true
 
-proc hit*(rect: XzRect, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
+proc hit*(rect: XzRect, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   let t = (rect.k - r.orig.y) / r.dir.y
-  if t < t_min or t > t_max:
+  if t < tMin or t > tMax:
     return false
   let x = r.orig.x + t * r.dir.x
   let z = r.orig.z + t * r.dir.z
   if x < rect.x0 or x > rect.x1 or z < rect.z0 or z > rect.z1:
     return false
-  #rec.u = (x - rect.x0) / (rect.x1 - rect.x0)
-  #rec.v = (y - rect.y0) / (rect.y1 - rect.y0)
+  rec.u = (x - rect.x0) / (rect.x1 - rect.x0)
+  rec.v = (z - rect.z0) / (rect.z1 - rect.z0)
   rec.t = t
   let outward_normal = vec3(0.0, 1.0, 0.0)
   rec.setFaceNormal(r, outward_normal)
@@ -472,16 +499,16 @@ proc hit*(rect: XzRect, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
   rec.p = r.at(t)
   result = true
 
-proc hit*(rect: YzRect, r: Ray, t_min, t_max: float, rec: var HitRecord): bool =
+proc hit*(rect: YzRect, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   let t = (rect.k - r.orig.x) / r.dir.x
-  if t < t_min or t > t_max:
+  if t < tMin or t > tMax:
     return false
   let y = r.orig.y + t * r.dir.y
   let z = r.orig.z + t * r.dir.z
   if y < rect.y0 or y > rect.y1 or z < rect.z0 or z > rect.z1:
     return false
-  #rec.u = (x - rect.x0) / (rect.x1 - rect.x0)
-  #rec.v = (y - rect.y0) / (rect.y1 - rect.y0)
+  rec.u = (y - rect.y0) / (rect.y1 - rect.y0)
+  rec.v = (z - rect.z0) / (rect.z1 - rect.z0)
   rec.t = t
   let outward_normal = vec3(1.0, 0.0, 0.0)
   rec.setFaceNormal(r, outward_normal)
