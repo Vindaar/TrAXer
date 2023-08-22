@@ -6,6 +6,9 @@ knows, naming things is always fun huh.
 This is a fork of [[https://github.com/Vindaar/rayTracingInOneWeekend][my Raytracing In One Weekend]] implementation (see [[https://raytracing.github.io/][Ray
 Tracing in One Weekend]]), which majorly extends it.
 
+It is an easier to use, extend and interact with version of the
+raytracer part of https://github.com/jovoy/AxionElectronLimit.
+
 It adds some features of the second book, others from the amazing
 https://pbr-book.org/, but most importantly makes it a useful tool for
 my work:
@@ -21,28 +24,127 @@ towards ~LightTargets~. In addition with ~ImageSensors~ we can
 visualize the accumulation of rays on a sensor in the scene (and save
 them to binary buffers with F5).
 
-** Show me!
+Every time you move the camera the image buffer will be deleted. Until
+you do so however, it will accumulate more and more rays.
 
+** Installation
 
+The only real dependency is [[https://www.libsdl.org/][SDL2]], which should be easy to install on
+all linux distributions.
+
+Outside of that it uses [[https://github.com/Araq/malebolgia][malebolgia]] for multithreading. In addition for
+the ~--solarModelFile~ parsing it depends on
+[[https://github.com/SciNim/datamancer]] and its dependencies.
+
+Install both via:
+#+begin_src sh
+nimble install malebolgia datamancer
+#+end_src
 
 ** Controls
 
 Once you click on the window, it activates mouse control. To exit
 mouse control, press Escape.
 
-- W, A, S, D (or arrow keys): movement
-- Ctrl, Space: up, down (a bit broken)
-- T: switches to light tracing mode when single threaded (irrelevant
+- ~W, A, S, D~ (or arrow keys): movement
+- ~Ctrl, Space~: up, down (a bit broken)
+- ~T~: switches to light tracing mode when single threaded (irrelevant
   nowadays)
-- PageUp, PageDown: Increase / decrease the movement speed
-- Tab: invert the view front to back    
-- F5: Save the current buffers (image, counts and all ~ImageSensors~)
+- ~PageUp, PageDown~: Increase / decrease the movement speed
+- ~TAB~: invert the view front to back    
+- ~F5~: Save the current buffers (image, counts and all ~ImageSensors~)
   to the ~out~ directory, which can be plotted using the ~plotBinary~
   helper script.
-    
 
+** Options
 
+Auto generated CLI by [[https://github.com/c-blake/cligen][cligen]]. Help texts still need to be added, but
+the basics should be pretty obvious.
 
+#+begin_src
+Usage
+  main [optional-params]
+Looking at mirrors!
+Options:
+  -h, --help                              print this cligen-erated help
+
+  --help-syntax                           advanced: prepend,plurals,..
+
+  -w=, --width=          int        600   set width
+
+  -m=, --maxDepth=       int        5     set maxDepth
+
+  -s=, --speed=          float      1.0   set speed
+
+  --speedMul=            float      1.1   set speedMul
+
+  --spheres              bool       false set spheres
+
+  -l, --llnl             bool       false set llnl
+
+  --llnlTwice            bool       false set llnlTwice
+
+  -f, --fullTelescope    bool       false set fullTelescope
+
+  -a, --axisAligned      bool       false set axisAligned
+
+  --focalPoint           bool       false set focalPoint
+
+  -v=, --vfov=           float      90.0  set vfov
+
+  -n=, --numRays=        int        100   set numRays
+
+  --visibleTarget        bool       false set visibleTarget
+
+  -g, --gridLines        bool       false set gridLines
+
+  -u, --usePerfectMirror bool       true  set usePerfectMirror
+
+  --sourceKind=          SourceKind skSun select 1 SourceKind
+
+  --solarModelFile=      string     ""    set solarModelFile
+
+  --nJobs=               int        16    set nJobs
+
+  -r=, --rayAt=          float      1.0   set rayAt
+#+end_src
+
+** Show me!
+
+*** The classical
+
+*** The LLNL CAST telescope setup
+
+Pictures of the first implementation of the LLNL CAST telescope setup
+(without any external pipes of course!)
+
+You get this scene if you use the ~--llnl~ command.
+
+[[./media/raytracing_llnl_telescope_bore.png]]
+[[./media/raytracing_llnl_telescope_sensor.png]]
+[[./media/raytracing_llnl_magnet_bore_sun_disk.png]]
+[[./media/raytracing_focal_point_interactive_first_attempt.png]]
+[[./media/raytracing_focal_point_paralle_xray_finger_interactive_after_fixes.png]]
+[[./media/raytracing_llnl_focal_point_image_sensor_parallel_light_looking_at.png]]
+[[./media/raytracing_llnl_focal_point_image_sensor_xray_finger_14.2m_3mm_looking_at.png]]
+
+*** Hypothetical full LLNL telescope
+
+You get this scene if you use the ~--llnl --fullTelescope~ command.
+
+[[./media/full_telescope_side.png]]
+[[./media/full_telescope_front_1500mm.png]]
+[[./media/full_telescope_at_1530mm.png]]
+[[./media/full_telescope_side_above.png]]
+[[./media/full_telescope_towards_sensor.png]]
+
+*** Hypothetical "double" LLNL telescope
+
+You get this scene if you use the ~--llnl --llnlTwice~ command.
+
+[[./media/llnl_twice_from_above.png]]
+[[./media/llnl_twice_from_front.png]]
+[[./media/llnl_twice_towards_image_sensor.png]]
 
 ** TODO Things to do
 
