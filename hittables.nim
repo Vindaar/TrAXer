@@ -1015,3 +1015,71 @@ proc getSources*(h: var HittablesList, delete: bool): HittablesList {.gcsafe.} =
       for x in result:
         h.delete(x)
 
+proc samplePoint*(h: Hittable, rnd: var Rand): Point {.gcsafe.}
+proc samplePoint*(s: Sphere, rnd: var Rand): Point {.gcsafe.} =
+  ## Samples a random point on the sphere surface
+  case s.mat.kind
+  of mkSolarEmission: discard
+  else:
+    ## Sample uniformly from the sphere
+    let p = rnd.randomInUnitSphere()
+    result = Point(p * s.radius)
+proc samplePoint*(d: Disk, rnd: var Rand): Point {.gcsafe.} =
+  ## Samples a random point on the disk surface
+  result = Point(rnd.randomInUnitDisk() * d.radius)
+
+proc samplePoint*(c: Cylinder, rnd: var Rand): Point {.gcsafe.} =
+  ## Samples a random point on the cylinder surface
+  # cylinder is aligned along z
+  doAssert false, "Not yet implemented."
+
+proc samplePoint*(c: Cone, rnd: var Rand): Point {.gcsafe.} =
+  ## Samples a random point on the cone surface
+  doAssert false, "Not yet implemented."
+
+proc samplePoint*(r: XyRect, rnd: var Rand): Point {.gcsafe.} =
+  ## Samples a random point on the rect surface surface
+  let x = rnd.rand(r.x0 .. r.x1)
+  let y = rnd.rand(r.y0 .. r.y1)
+  ## XXX: Handle k
+  result = point(x, y, 0)
+
+proc samplePoint*(r: XzRect, rnd: var Rand): Point {.gcsafe.} =
+  ## Samples a random point on the rect surface surface
+  let x = rnd.rand(r.x0 .. r.x1)
+  let z = rnd.rand(r.z0 .. r.z1)
+  ## XXX: Handle k
+  result = point(x, 0, z)
+
+proc samplePoint*(r: YzRect, rnd: var Rand): Point {.gcsafe.} =
+  ## Samples a random point on the rect surface surface
+  let y = rnd.rand(r.y0 .. r.y1)
+  let z = rnd.rand(r.z0 .. r.z1)
+  ## XXX: Handle k
+  result = point(0, y, z)
+
+proc samplePoint*(b: Box, rnd: var Rand): Point {.gcsafe.} =
+  ## Samples a random point on the rect surface surface
+  let side = rnd.rand(b.sides.len - 1)
+  ## XXX: Correct by point p0, p1!
+  result = samplePoint(b.sides[side], rnd)
+
+proc samplePoint*(b: BvhNode, rnd: var Rand): Point {.gcsafe.} =
+  doAssert false, "Cannot sample from a BvhNode"
+
+proc samplePoint*(h: Hittable, rnd: var Rand): Point {.gcsafe.} =
+  ## Samples a point from the contained object by sampling uniformly
+  ## from the underlying geometry of the `Hittable` or potentially
+  ## in a different way depending on the material.
+  case h.kind
+  of htSphere: result = h.hSphere.samplePoint(rnd)
+  of htCylinder: result = h.hCylinder.samplePoint(rnd)
+  of htCone: result = h.hCone.samplePoint(rnd)
+  of htDisk: result = h.hDisk.samplePoint(rnd)
+  of htBvhNode: result = h.hBvhNode.samplePoint(rnd)
+  of htXyRect: result = h.hXyRect.samplePoint(rnd)
+  of htXzRect: result = h.hXzRect.samplePoint(rnd)
+  of htYzRect: result = h.hYzRect.samplePoint(rnd)
+  of htBox: result = h.hBox.samplePoint(rnd)
+  # Convert point back to world space
+  result = h.inverseTransform(result)
