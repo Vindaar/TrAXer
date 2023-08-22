@@ -527,6 +527,10 @@ proc renderSdl*(img: Image, world: var HittablesList,
         of SDL_SCANCODE_N:
           ## activate free movement (n for noclip ;))
           movementIsFree = not movementIsFree
+        of SDL_SCANCODE_T:
+          Tracing = if Tracing == ttLights: ttCamera else: ttLights
+          resetBufs(bufT, counts)
+          echo "[INFO]: Set tracing type to: ", Tracing
         of SDL_SCANCODE_ESCAPE:
           ## 'Uncapture' the mouse
           if mouseModeIsRelative:
