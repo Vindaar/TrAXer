@@ -591,16 +591,15 @@ proc boundingBox*(s: Disk, output_box: var AABB): bool =
 proc boundingBox*(cyl: Cylinder, output_box: var AABB): bool =
   ## in z direction only a small width
   output_box = initAabb( ## XXX: Could be from 0 to Height
-    - point(cyl.radius, cyl.radius, cyl.zMax - 0.0001),
+    - point(cyl.radius, cyl.radius, - 0.0001),
     + point(cyl.radius, cyl.radius, cyl.zMax + 0.0001)
   )
   result = true
 
 proc boundingBox*(con: Cone, output_box: var AABB): bool =
-  ## in z direction only a small width
   output_box = initAabb(
-    - point(con.radius, con.radius, con.height - 0.0001),
-    + point(con.radius, con.radius, con.height + 0.0001)
+    - point(con.radius, con.radius, -0.0001),
+    + point(con.radius, con.radius, con.zMax + 0.0001)
   )
   result = true
 
