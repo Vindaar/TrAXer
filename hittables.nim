@@ -895,7 +895,7 @@ proc scatter*(m: Dielectric,
   else:
     direction = refract(unitDirection, rec.normal, refractionRatio)
 
-  scattered = initRay(rec.p, direction)
+  scattered = initRay(rec.p, direction, r_in.typ)
   result = true
 
 type

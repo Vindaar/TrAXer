@@ -182,4 +182,4 @@ proc getRay*(c: Camera, rnd: var Rand, i, j: int): Ray =
   let rayOrigin = if c.defocusAngle <= 0.0: c.center else: c.defocusDiskSample(rnd)
   let rayDirection = pixelSample - rayOrigin
 
-  result = initRay(ray_origin, ray_direction)
+  result = initRay(rayOrigin, rayDirection, rtCamera)

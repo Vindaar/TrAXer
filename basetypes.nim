@@ -15,9 +15,15 @@ type
 
   ColorU8* = tuple[r, g, b: uint8]
 
+  RayType* = enum
+    rtCamera, ## A ray that is emitted *from the camera*
+    rtLight   ## A ray that is emitted *from a light source*
+
   Ray* = object
     orig*: Point
     dir*: Vec3d
+    typ*: RayType
+
 
 #proc vec3*(x, y, z: float): Vec3 = Vec3(arr: [x, y, z])
 proc color*(r, g, b: float): Color = Color(vec3(r, g, b))
@@ -281,7 +287,7 @@ proc `+.`*(p1, p2: Point): Point =
 proc `-.`*(p1, p2: Point): Point =
   result = Point(p1.Vec3d - p2.Vec3d)
 
-proc initRay*(origin: Point, direction: Vec3d): Ray =
-  result = Ray(orig: origin, dir: direction)
+proc initRay*(origin: Point, direction: Vec3d, typ: RayType): Ray =
+  result = Ray(orig: origin, dir: direction, typ: typ)
 
 proc at*(r: Ray, t: float): Point = result = (r.orig + t * r.dir)
