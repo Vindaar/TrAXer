@@ -31,9 +31,6 @@ proc rayColor*(c: Camera, rnd: var Rand, r: Ray, world: HittablesList, depth: in
     result = (1.0 - t) * color(1.0, 1.0, 1.0) + t * color(0.5, 0.7, 1.0)
 
 
-  let unitDirection = unitVector(r.dir)
-  let t = 0.5 * (unitDirection.y + 1.0)
-  result = (1.0 - t) * color(1.0, 1.0, 1.0) + t * color(0.5, 0.7, 1.0)
 
 proc writeColor*(f: File, color: Color, samplesPerPixel: int) =
   let scale = 1.0 / samplesPerPixel.float
