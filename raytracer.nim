@@ -73,8 +73,9 @@ proc initRenderContexts(numThreads: int,
     ## XXX: clone world?
     var rnd = initRand(i * 0xfafe)
     result[i] = initRenderContext(rnd, bufP, countsP, window, numRays, width, height, camera.clone(), world.clone(), maxDepth, numPer, numThreads)
+
 when compileOption("threads"):
-  import weave
+  import malebolgia
 var THREADS = 16
 
 proc rayColor*(c: Camera, rnd: var Rand, r: Ray, world: HittablesList, depth: int): Color {.gcsafe.} =
@@ -611,12 +612,10 @@ proc renderSdl*(img: Image, world: var HittablesList,
         lastLookFrom = camera.lookFrom
 
       ctxSeq.updateCamera(camera)
-      init(Weave)
-      parallelFor j in 0 ..< THREADS:
-        captures: {ctxSeq}
-        renderFrame(j, ctxSeq[j])
-      exit(Weave)
-      copyBuf(bufT, window)
+      var m = createMaster()
+      m.awaitAll:
+        for j in 0 ..< THREADS:
+          m.spawn renderFrame(j, ctxSeq[j].addr)
 
     unlockSurface(window)
     #sdl2.clear(arg.renderer)
