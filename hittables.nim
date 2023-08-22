@@ -191,6 +191,27 @@ proc add*(h: var HittablesList, el: Hittable) =
   #inc h.len
   #h[h.len - 1] = el
 
+proc clone*(h: Hittable): Hittable =
+  result = Hittable(trans: h.trans,
+                    invTrans: h.invTrans,
+                    kind: h.kind)
+  case h.kind
+  of htSphere:   result.hSphere = h.hSphere
+  of htCylinder: result.hCylinder = h.hCylinder
+  of htCone:     result.hCone = h.hCone
+  of htBvhNode:  result.hBvhNode = h.hBvhNode
+  of htXyRect:   result.hXyRect = h.hXyRect
+  of htXzRect:   result.hXzRect = h.hXzRect
+  of htYzRect:   result.hYzRect = h.hYzRect
+  of htBox:      result.hBox = h.hBox
+  of htDisk:     result.hDisk = h.hDisk
+
+
+proc clone*(h: HittablesList): HittablesList =
+  result = initHittables(h.len)
+  for x in h:
+    result.add clone(x)
+
 proc toHittable*(s: Sphere): Hittable   = result = Hittable(kind: htSphere, hSphere: s)
 proc toHittable*(c: Cylinder): Hittable = result = Hittable(kind: htCylinder, hCylinder: c)
 proc toHittable*(c: Cone): Hittable     = result = Hittable(kind: htCone, hCone: c)
