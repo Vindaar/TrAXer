@@ -76,6 +76,8 @@ type
   Disk* = object
     distance*: float # distance along z axis
     radius*: float
+    innerRadius*: float
+    phiMax*: float = 360.0.degToRad
     mat*: Material
 
   AnyHittable* = Sphere | Cylinder | Cone | BvhNode | XyRect | XzRect | YzRect | Box | Disk
