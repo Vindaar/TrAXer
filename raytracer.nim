@@ -592,9 +592,8 @@ proc renderSdl*(img: Image, world: var HittablesList,
             echo "Old yaw ", camera.yaw, " add yaw = ", yaw, " new yaw ", nYaw
 
             let nPitch = camera.pitch + pitch
-            echo "New view from : ", camera.lookFrom, ", yaw = ", nYaw, ", pitch = ", nPitch
             camera.updateYawPitchRoll(camera.lookFrom, nYaw, nPitch, 0.0)
-            echo "Now looking at: ", camera.lookAt
+            echo "Now looking at: ", camera.lookAt, " from : ", camera.lookFrom, ", yaw = ", nYaw, ", pitch = ", nPitch
           resetBufs(bufT, counts)
 
       else: echo event.kind
@@ -608,14 +607,15 @@ proc renderSdl*(img: Image, world: var HittablesList,
       ## TODO: replace this by a long running background service to which we submit
       ## jobs and the await them? So we don't have the overhead!
       if camera.lookFrom != lastLookFrom:
-        echo "[INFO] Current position (lookFrom) = ", camera.lookFrom
+        echo "[INFO] Current position (lookFrom) = ", camera.lookFrom, " at (lookAt) ", camera.lookAt
         lastLookFrom = camera.lookFrom
+
+      ctxSeq.updateCamera(camera)
       init(Weave)
       parallelFor j in 0 ..< THREADS:
         captures: {ctxSeq}
         renderFrame(j, ctxSeq[j])
       exit(Weave)
-      ctxSeq.updateCamera(camera)
       copyBuf(bufT, window)
 
     unlockSurface(window)
