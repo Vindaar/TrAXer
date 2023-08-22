@@ -16,11 +16,11 @@ type
     of htXyRect: hXyRect*: XyRect
     of htXzRect: hXzRect*: XzRect
     of htYzRect: hYzRect*: YzRect
-    of htBox: hBox: Box
+    of htBox: hBox*: Box
     of htDisk: hDisk: Disk
 
   HittablesList* = object
-    len: int # len of data seq
+    len*: int # len of data seq
     #size*: int # internal data size
     data*: seq[Hittable] #ptr UncheckedArray[Hittable]
 
