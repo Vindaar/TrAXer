@@ -6,7 +6,7 @@ type
   Transform* = Mat4d
 
   HittableKind* = enum
-    htSphere, htCylinder, htCone, htBvhNode, htXyRect, htXzRect, htYzRect, htBox, htDisk
+    htSphere, htCylinder, htCone, htParaboloid, htHyperboloid, htBvhNode, htXyRect, htXzRect, htYzRect, htBox, htDisk
   Hittable* {.acyclic.} = ref object
     trans*: Transform = mat4d()
     invTrans*: Transform = mat4d()
@@ -14,6 +14,8 @@ type
     of htSphere: hSphere*: Sphere
     of htCylinder: hCylinder*: Cylinder
     of htCone: hCone*: Cone
+    of htParaboloid: hParaboloid*: Paraboloid
+    of htHyperboloid: hHyperboloid*: Hyperboloid
     of htBvhNode: hBvhNode*: BvhNode
     of htXyRect: hXyRect*: XyRect
     of htXzRect: hXzRect*: XzRect
@@ -69,6 +71,26 @@ type
     zMax*: float ## Cuts off the cone at zMax.
     mat*: Material
 
+  Paraboloid* = object
+    radius*: float
+    zMin*: float
+    zMax*: float
+    phiMax*: float
+    mat*: Material
+
+  Hyperboloid* = object
+    p1*: Point
+    p2*: Point
+    #radius1*: float
+    #radius2*: float
+    rMax*: float
+    zMin*: float
+    zMax*: float
+    ah*: float
+    ch*: float
+    phiMax*: float
+    mat*: Material
+
   Box* = object
     mat*: Material
     boxMin*: Point
@@ -82,7 +104,7 @@ type
     phiMax*: float = 360.0.degToRad
     mat*: Material
 
-  AnyHittable* = Sphere | Cylinder | Cone | BvhNode | XyRect | XzRect | YzRect | Box | Disk
+  AnyHittable* = Sphere | Cylinder | Cone | Paraboloid | Hyperboloid | BvhNode | XyRect | XzRect | YzRect | Box | Disk
 
   MaterialKind* = enum
     mkLambertian, mkMetal, mkDielectric, mkDiffuseLight, mkSolarEmission, mkLaser, mkImageSensor, mkLightTarget
@@ -225,15 +247,17 @@ proc clone*(h: Hittable): Hittable =
                     invTrans: h.invTrans,
                     kind: h.kind)
   case h.kind
-  of htSphere:   result.hSphere = h.hSphere
-  of htCylinder: result.hCylinder = h.hCylinder
-  of htCone:     result.hCone = h.hCone
-  of htBvhNode:  result.hBvhNode = h.hBvhNode
-  of htXyRect:   result.hXyRect = h.hXyRect
-  of htXzRect:   result.hXzRect = h.hXzRect
-  of htYzRect:   result.hYzRect = h.hYzRect
-  of htBox:      result.hBox = h.hBox
-  of htDisk:     result.hDisk = h.hDisk
+  of htSphere:      result.hSphere = h.hSphere
+  of htCylinder:    result.hCylinder = h.hCylinder
+  of htCone:        result.hCone = h.hCone
+  of htParaboloid:  result.hParaboloid = h.hParaboloid
+  of htHyperboloid: result.hHyperboloid = h.hHyperboloid
+  of htBvhNode:     result.hBvhNode = h.hBvhNode
+  of htXyRect:      result.hXyRect = h.hXyRect
+  of htXzRect:      result.hXzRect = h.hXzRect
+  of htYzRect:      result.hYzRect = h.hYzRect
+  of htBox:         result.hBox = h.hBox
+  of htDisk:        result.hDisk = h.hDisk
 
 
 proc clone*(h: HittablesList): HittablesList =
@@ -241,15 +265,17 @@ proc clone*(h: HittablesList): HittablesList =
   for x in h:
     result.add clone(x)
 
-proc toHittable*(s: Sphere): Hittable   = result = Hittable(kind: htSphere, hSphere: s)
-proc toHittable*(c: Cylinder): Hittable = result = Hittable(kind: htCylinder, hCylinder: c)
-proc toHittable*(c: Cone): Hittable     = result = Hittable(kind: htCone, hCone: c)
-proc toHittable*(d: Disk): Hittable     = result = Hittable(kind: htDisk, hDisk: d)
-proc toHittable*(b: BvhNode): Hittable  = result = Hittable(kind: htBvhNode, hBvhNode: b)
-proc toHittable*(r: XyRect): Hittable   = result = Hittable(kind: htXyRect, hXyRect: r)
-proc toHittable*(r: XzRect): Hittable   = result = Hittable(kind: htXzRect, hXzRect: r)
-proc toHittable*(r: YzRect): Hittable   = result = Hittable(kind: htYzRect, hYzRect: r)
-proc toHittable*(b: Box): Hittable      = result = Hittable(kind: htBox, hBox: b)
+proc toHittable*(s: Sphere): Hittable      = result = Hittable(kind: htSphere, hSphere: s)
+proc toHittable*(c: Cylinder): Hittable    = result = Hittable(kind: htCylinder, hCylinder: c)
+proc toHittable*(c: Cone): Hittable        = result = Hittable(kind: htCone, hCone: c)
+proc toHittable*(p: Paraboloid): Hittable  = result = Hittable(kind: htParaboloid, hParaboloid: p)
+proc toHittable*(h: Hyperboloid): Hittable = result = Hittable(kind: htHyperboloid, hHyperboloid: h)
+proc toHittable*(d: Disk): Hittable        = result = Hittable(kind: htDisk, hDisk: d)
+proc toHittable*(b: BvhNode): Hittable     = result = Hittable(kind: htBvhNode, hBvhNode: b)
+proc toHittable*(r: XyRect): Hittable      = result = Hittable(kind: htXyRect, hXyRect: r)
+proc toHittable*(r: XzRect): Hittable      = result = Hittable(kind: htXzRect, hXzRect: r)
+proc toHittable*(r: YzRect): Hittable      = result = Hittable(kind: htYzRect, hYzRect: r)
+proc toHittable*(b: Box): Hittable         = result = Hittable(kind: htBox, hBox: b)
 
 proc add*[T: AnyHittable](h: var HittablesList, ht: T) = h.add toHittable(ht)
 proc add*(h: var HittablesList, lst: HittablesList) =
@@ -456,6 +482,129 @@ proc hit*(con: Cone, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
 
   result = true
 
+proc hit*(par: Paraboloid, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
+  ## Based on `pbrt`.
+
+  # Initialize _EFloat_ ray coordinate values
+  let k = par.zMax / (par.radius * par.radius)
+  let a = k * (r.dir.x * r.dir.x + r.dir.y * r.dir.y)
+  let b = 2 * k * (r.dir.x * r.orig.x + r.dir.y * r.orig.y) - r.dir.z
+  let c = k * (r.orig.x * r.orig.x + r.orig.y * r.orig.y) - r.orig.z
+
+  # Solve quadratic equation for _t_ values
+  var
+    t0: float
+    t1: float
+  if not solveQuadratic(a, b, c, t0, t1): return false
+
+  # Check quadric shape _t0_ and _t1_ for nearest intersection
+  if t0 > tMax or t1 <= 0: return false
+  var tShapeHit = t0
+  if tShapeHit <= 0:
+    tShapeHit = t1
+    if tShapeHit > tMax: return false
+
+
+  # Compute paraboloid inverse mapping
+  var pHit = r.at(tShapeHit)
+  var phi = arctan2(pHit.y, pHit.x)
+  if phi < 0: phi += 2 * PI
+
+  # Test paraboloid intersection against clipping parameters
+  if pHit.z < par.zMin or pHit.z > par.zMax or phi > par.phiMax:
+    if tShapeHit == t1: return false
+    tShapeHit = t1
+    if t1 > tMax: return false
+    # Compute paraboloid inverse mapping
+    pHit = r.at(tShapeHit)
+    phi = arctan2(pHit.y, pHit.x)
+    if phi < 0: phi += 2 * PI
+    if pHit.z < par.zMin or pHit.z > par.zMax or phi > par.phiMax: return false
+
+  # Find parametric representation of paraboloid hit
+  let u = phi / par.phiMax
+  let v = (pHit.z - par.zMin) / (par.zMax - par.zMin)
+
+  # Compute paraboloid $\dpdu$ and $\dpdv$
+  let dpdu = vec3(-par.phiMax * pHit.y, par.phiMax * pHit.x, 0.0)
+  let dpdv = (par.zMax - par.zMin) * vec3(pHit.x / (2 * pHit.z), pHit.y / (2 * pHit.z), 1.0)
+
+  rec.t = tShapeHit
+  rec.p = r.at(rec.t)
+  let outward_normal = normalize(cross(dpdu, dpdv))
+  rec.setFaceNormal(r, outward_normal.Vec3d)
+  rec.mat = par.mat
+
+  rec.u = u
+  rec.v = v
+
+  result = true
+
+proc hit*(hyp: Hyperboloid, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
+  ## Based on `pbrt`.
+  # Initialize _EFloat_ ray coordinate values
+  let a = hyp.ah * r.dir.x * r.dir.x + hyp.ah * r.dir.y * r.dir.y - hyp.ch * r.dir.z * r.dir.z
+  let b = 2.0 * (hyp.ah * r.dir.x * r.orig.x + hyp.ah * r.dir.y * r.orig.y - hyp.ch * r.dir.z * r.orig.z)
+  let c = hyp.ah * r.orig.x * r.orig.x + hyp.ah * r.orig.y * r.orig.y - hyp.ch * r.orig.z * r.orig.z - 1.0
+
+  # Solve quadratic equation for _t_ values
+  var
+    t0: float
+    t1: float
+  if not solveQuadratic(a, b, c, t0, t1): return false
+
+  # Check quadric shape _t0_ and _t1_ for nearest intersection
+  if t0 > tMax or t1 <= 0: return false
+  var tShapeHit = t0
+  if tShapeHit <= 0:
+    tShapeHit = t1
+    if tShapeHit > tMax: return false
+
+  # Compute hyperboloid inverse mapping
+  var pHit = r.at(tShapeHit)
+  var v = (pHit.z - hyp.p1.z) / (hyp.p2.z - hyp.p1.z)
+  let pr = (1 - v) * hyp.p1 + v * hyp.p2
+  var phi = arctan2(pr.x * pHit.y - pHit.x * pr.y,
+                    pHit.x * pr.x + pHit.y * pr.y)
+  if phi < 0: phi += 2 * PI
+
+  # Test hyperboloid intersection against clipping parameters
+  if pHit.z < hyp.zMin or pHit.z > hyp.zMax or phi > hyp.phiMax:
+    if tShapeHit == t1: return false
+    tShapeHit = t1
+    if t1 > tMax: return false
+    # Compute hyperboloid inverse mapping
+    pHit = r.at(tShapeHit)
+    v = (pHit.z - hyp.p1.z) / (hyp.p2.z - hyp.p1.z)
+    let pr = (1 - v) * hyp.p1 + v * hyp.p2
+    phi = arctan2(pr.x * pHit.y - pHit.x * pr.y,
+             pHit.x * pr.x + pHit.y * pr.y)
+    if phi < 0: phi += 2 * Pi
+    if pHit.z < hyp.zMin or pHit.z > hyp.zMax or phi > hyp.phiMax: return false
+
+
+  # Compute parametric representation of hyperboloid hit
+  let u = phi / hyp.phiMax
+
+  # Compute hyperboloid $\dpdu$ and $\dpdv$
+  let
+    cosPhi = cos(phi)
+    sinPhi = sin(phi)
+  let dpdu = vec3(-hyp.phiMax * pHit.y, hyp.phiMax * pHit.x, 0.0)
+  let dpdv = vec3((hyp.p2.x - hyp.p1.x) * cosPhi - (hyp.p2.y - hyp.p1.y) * sinPhi,
+                  (hyp.p2.x - hyp.p1.x) * sinPhi + (hyp.p2.y - hyp.p1.y) * cosPhi,
+                  hyp.p2.z - hyp.p1.z)
+
+  rec.t = tShapeHit
+  rec.p = r.at(rec.t)
+  let outward_normal = normalize(cross(dpdu, dpdv))
+  rec.setFaceNormal(r, outward_normal.Vec3d)
+  rec.mat = hyp.mat
+
+  rec.u = u
+  rec.v = v
+
+  result = true
 
 proc hit*(d: Disk, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   let t = (d.distance - r.orig.z) / r.dir.z
@@ -584,15 +733,17 @@ proc hit*(h: Hittable, r: Ray, tMin, tMax: float, rec: var HitRecord): bool {.gc
   let rOb = h.transform(r)
   # 2. compute the hit
   case h.kind
-  of htSphere:   result = h.hSphere.hit(rOb, tMin, tMax, rec)
-  of htCylinder: result = h.hCylinder.hit(rOb, tMin, tMax, rec)
-  of htCone:     result = h.hCone.hit(rOb, tMin, tMax, rec)
-  of htDisk:     result = h.hDisk.hit(rOb, tMin, tMax, rec)
-  of htBvhNode:  result = h.hBvhNode.hit(rOb, tMin, tMax, rec)
-  of htXyRect:   result = h.hXyRect.hit(rOb, tMin, tMax, rec)
-  of htXzRect:   result = h.hXzRect.hit(rOb, tMin, tMax, rec)
-  of htYzRect:   result = h.hYzRect.hit(rOb, tMin, tMax, rec)
-  of htBox:      result = h.hBox.hit(rOb, tMin, tMax, rec)
+  of htSphere:      result = h.hSphere.hit(rOb, tMin, tMax, rec)
+  of htCylinder:    result = h.hCylinder.hit(rOb, tMin, tMax, rec)
+  of htCone:        result = h.hCone.hit(rOb, tMin, tMax, rec)
+  of htParaboloid:  result = h.hParaboloid.hit(rOb, tMin, tMax, rec)
+  of htHyperboloid: result = h.hHyperboloid.hit(rOb, tMin, tMax, rec)
+  of htDisk:        result = h.hDisk.hit(rOb, tMin, tMax, rec)
+  of htBvhNode:     result = h.hBvhNode.hit(rOb, tMin, tMax, rec)
+  of htXyRect:      result = h.hXyRect.hit(rOb, tMin, tMax, rec)
+  of htXzRect:      result = h.hXzRect.hit(rOb, tMin, tMax, rec)
+  of htYzRect:      result = h.hYzRect.hit(rOb, tMin, tMax, rec)
+  of htBox:         result = h.hBox.hit(rOb, tMin, tMax, rec)
   # 3. convert rec back to world space
   ## XXX: normal transformation in general more complex!
   ## `pbrt` uses `mInv` for *FORWARD* transformation!
@@ -630,6 +781,23 @@ proc boundingBox*(con: Cone, output_box: var AABB): bool =
   )
   result = true
 
+proc boundingBox*(con: Paraboloid, output_box: var AABB): bool =
+  #output_box = initAabb(
+  #  - point(con.radius, con.radius, -0.0001),
+  #  + point(con.radius, con.radius, con.zMax + 0.0001)
+  #)
+  #result = true
+  doAssert false, "IMPLEMENT"
+
+proc boundingBox*(con: Hyperboloid, output_box: var AABB): bool =
+  #output_box = initAabb(
+  #  - point(con.radius, con.radius, -0.0001),
+  #  + point(con.radius, con.radius, con.zMax + 0.0001)
+  #)
+  #result = true
+  doAssert false, "IMPLEMENT"
+
+
 proc boundingBox*(n: BvhNode, outputBox: var AABB): bool =
   outputBox = n.box
   result = true
@@ -658,15 +826,17 @@ proc boundingBox*(b: Box, outputBox: var AABB): bool =
 
 proc boundingBox*(h: Hittable, output_box: var AABB): bool =
   case h.kind
-  of htSphere: result = h.hSphere.boundingBox(output_box)
-  of htCylinder: result = h.hCylinder.boundingBox(output_box)
-  of htCone: result = h.hCone.boundingBox(output_box)
-  of htDisk: result = h.hDisk.boundingBox(output_box)
-  of htBvhNode: result = h.hBvhNode.boundingBox(output_box)
-  of htXyRect: result = h.hXyRect.boundingBox(output_box)
-  of htXzRect: result = h.hXzRect.boundingBox(output_box)
-  of htYzRect: result = h.hYzRect.boundingBox(output_box)
-  of htBox: result = h.hBox.boundingBox(output_box)
+  of htSphere:      result = h.hSphere.boundingBox(output_box)
+  of htCylinder:    result = h.hCylinder.boundingBox(output_box)
+  of htCone:        result = h.hCone.boundingBox(output_box)
+  of htParaboloid:  result = h.hParaboloid.boundingBox(output_box)
+  of htHyperboloid: result = h.hHyperboloid.boundingBox(output_box)
+  of htDisk:        result = h.hDisk.boundingBox(output_box)
+  of htBvhNode:     result = h.hBvhNode.boundingBox(output_box)
+  of htXyRect:      result = h.hXyRect.boundingBox(output_box)
+  of htXzRect:      result = h.hXzRect.boundingBox(output_box)
+  of htYzRect:      result = h.hYzRect.boundingBox(output_box)
+  of htBox:         result = h.hBox.boundingBox(output_box)
 
 proc boundingBox*(h: HittablesList, output_box: var AABB): bool =
   if h.len == 0:
@@ -789,6 +959,35 @@ proc initXzRect*(x0, x1, z0, z1, k: float, mat: Material): XzRect =
 
 proc initYzRect*(y0, y1, z0, z1, k: float, mat: Material): YzRect =
   result = YzRect(y0: y0, y1: y1, z0: z0, z1: z1, k: k, mat: mat)
+
+proc initHyperboloid*(p1, p2: Point, phiMax: float, mat: Material): Hyperboloid =
+  ## Based on `pbrt`
+  var p1 = p1
+  var p2 = p2
+  result.phiMax = phiMax ## XXX: Make radians in the future!
+  let radius1 = sqrt(p1.x * p1.x + p1.y * p1.y)
+  let radius2 = sqrt(p2.x * p2.x + p2.y * p2.y)
+  result.rMax = max(radius1, radius2)
+  result.zMin = min(p1.z, p2.z)
+  result.zMax = max(p1.z, p2.z)
+  # Compute implicit function coefficients for hyperboloid
+  if result.p2.z == 0.0: swap(p1, p2)
+  var pp = p1
+  var
+    xy1: float
+    xy2: float
+  result.ah = Inf
+  result.ch = NaN
+  while classify(result.ah) == fcInf or classify(result.ah) == fcNaN:
+    pp = pp + 2.0 * (p2 - p1)
+    xy1 = pp.x * pp.x + pp.y * pp.y
+    xy2 = p2.x * p2.x + p2.y * p2.y
+    result.ah = (1.0 / xy1 - (pp.z * pp.z) / (xy1 * p2.z * p2.z)) /
+         (1.0 - (xy2 * pp.z * pp.z) / (xy1 * p2.z * p2.z))
+    result.ch = (result.ah * xy2 - 1) / (p2.z * p2.z)
+  result.p1 = p1
+  result.p2 = p2
+  result.mat = mat
 
 template rotations(name: untyped): untyped =
   proc `name`*[T: AnyHittable](h: T, angle: float): Hittable =
@@ -972,15 +1171,17 @@ proc emit*(m: Material, u, v: float, p: Point): Color =
 
 proc getMaterial*(h: Hittable): Material =
   case h.kind
-  of htSphere: result = h.hSphere.mat
-  of htCylinder: result = h.hCylinder.mat
-  of htCone: result = h.hCone.mat
-  of htDisk: result = h.hDisk.mat
-  of htBvhNode: result = Material()
-  of htXyRect: result = h.hXyRect.mat
-  of htXzRect: result = h.hXzRect.mat
-  of htYzRect: result = h.hYzRect.mat
-  of htBox: result = h.hBox.mat
+  of htSphere:      result = h.hSphere.mat
+  of htCylinder:    result = h.hCylinder.mat
+  of htCone:        result = h.hCone.mat
+  of htParaboloid:  result = h.hParaboloid.mat
+  of htHyperboloid: result = h.hHyperboloid.mat
+  of htDisk:        result = h.hDisk.mat
+  of htBvhNode:     result = Material()
+  of htXyRect:      result = h.hXyRect.mat
+  of htXzRect:      result = h.hXzRect.mat
+  of htYzRect:      result = h.hYzRect.mat
+  of htBox:         result = h.hBox.mat
 
 proc getHittablesOfKind*(h: HittablesList, kinds: set[MaterialKind]): HittablesList =
   ## Returns all hittables of materials of the given kinds from the given list as a list itself.
@@ -1053,6 +1254,14 @@ proc samplePoint*(c: Cone, rnd: var Rand): Point {.gcsafe.} =
   ## Samples a random point on the cone surface
   doAssert false, "Not yet implemented."
 
+proc samplePoint*(c: Paraboloid, rnd: var Rand): Point {.gcsafe.} =
+  ## Samples a random point on the paraboloid surface
+  doAssert false, "Not yet implemented."
+
+proc samplePoint*(c: Hyperboloid, rnd: var Rand): Point {.gcsafe.} =
+  ## Samples a random point on the hyperboloid surface
+  doAssert false, "Not yet implemented."
+
 proc samplePoint*(r: XyRect, rnd: var Rand): Point {.gcsafe.} =
   ## Samples a random point on the rect surface surface
   let x = rnd.rand(r.x0 .. r.x1)
@@ -1088,14 +1297,16 @@ proc samplePoint*(h: Hittable, rnd: var Rand): Point {.gcsafe.} =
   ## from the underlying geometry of the `Hittable` or potentially
   ## in a different way depending on the material.
   case h.kind
-  of htSphere: result = h.hSphere.samplePoint(rnd)
-  of htCylinder: result = h.hCylinder.samplePoint(rnd)
-  of htCone: result = h.hCone.samplePoint(rnd)
-  of htDisk: result = h.hDisk.samplePoint(rnd)
-  of htBvhNode: result = h.hBvhNode.samplePoint(rnd)
-  of htXyRect: result = h.hXyRect.samplePoint(rnd)
-  of htXzRect: result = h.hXzRect.samplePoint(rnd)
-  of htYzRect: result = h.hYzRect.samplePoint(rnd)
-  of htBox: result = h.hBox.samplePoint(rnd)
+  of htSphere:      result = h.hSphere.samplePoint(rnd)
+  of htCylinder:    result = h.hCylinder.samplePoint(rnd)
+  of htCone:        result = h.hCone.samplePoint(rnd)
+  of htParaboloid:  result = h.hParaboloid.samplePoint(rnd)
+  of htHyperboloid: result = h.hHyperboloid.samplePoint(rnd)
+  of htDisk:        result = h.hDisk.samplePoint(rnd)
+  of htBvhNode:     result = h.hBvhNode.samplePoint(rnd)
+  of htXyRect:      result = h.hXyRect.samplePoint(rnd)
+  of htXzRect:      result = h.hXzRect.samplePoint(rnd)
+  of htYzRect:      result = h.hYzRect.samplePoint(rnd)
+  of htBox:         result = h.hBox.samplePoint(rnd)
   # Convert point back to world space
   result = h.inverseTransform(result)
