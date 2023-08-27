@@ -896,6 +896,23 @@ proc magnetBore(magnet: Magnet, magnetPos: float): Hittable =
   result = Cylinder(radius: magnet.radius, zMin: 0.0, zMax: magnet.length, phiMax: 360.0.degToRad, mat: cylMetal)
     .translate(vec3(0.0, 0.0, magnetPos))
 
+proc windowStrongback(windowRotation, windowZOffset: float): HittablesList =
+  ## Implements the window strongback of the Si₃N₄ window used at CAST for the Septemboard detector.
+  const
+    distance = 2.3 #mm Distance between strips, edge to edge!
+    width = 0.5 # mm Width of each strip
+    thick = 0.2 # 200 μm thick
+    long = 20.0 ## Window has 2cm diameter. In reality circular, but doesn't matter.
+  result = initHittables()
+  let strMat = initLambertian(color(0.2, 0.2, 0.2))
+  for i in 0 ..< 4: ## 4 strips
+    let posY = i.float * (distance + width) - 1.5 * (distance + width)
+    result.add initBox(point(-long/2, -width/2, -thick/2),
+                       point( long/2,  width/2,  thick/2),
+                       toMaterial strMat) # we sink ot so that the box becomes the memory owner of the buffer
+      .translate(vec3(0.0, posY, windowZOffset)) ## z offset above chip. XXX: what to choose? we don't simulate gas diffusion, so 0.3cm?
+  result = result.rotateZ(windowRotation)
+
 proc llnlFocalPointRay(tel: Telescope, magnet: Magnet, fullTelescope: bool): Point =
   ## Returns the ray of the given Telescope (actually assuming the LLNL for the time being)
   ## that goes from the telescope center to the focal point. Evaluating it at any point
@@ -975,6 +992,8 @@ proc imageSensor(tel: Telescope, magnet: Magnet,
                      point( sensorW/2,  sensorH/2,  sensorThickness/2),
                      imSensor) # we sink ot so that the box becomes the memory owner of the buffer
                                # otherwise `imSensor` goes out of scope and frees buffer!
+  if not ignoreWindow:
+    result.add windowStrongback(windowRotation, windowZOffset)
   let target = llnlFocalPoint(tel, rayAt, fullTelescope)
   result = result
     .rotateZ(telescopeRotation)
