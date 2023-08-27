@@ -1018,7 +1018,7 @@ proc translate*[V: Vec3d | Point](h: Hittable, v: V): Hittable =
   result.invTrans = result.trans.inverse()
 proc translate*[V: Vec3d | Point](v: V, h: Hittable): Hittable = h.translate(v.Vec3d)
 
-proc translate*(h: HittablesList, v: Vec3d): HittablesList =
+proc translate*(h: HittablesList, v: Vec3d | Point): HittablesList =
   result = initHittables(h.len)
   for x in h:
     result.add translate(x, v)
