@@ -1012,18 +1012,32 @@ proc graphiteSpacer(tel: Telescope, magnet: Magnet, fullTelescope: bool): Hittab
       .translate(vec3(0.0, 0.0, lMirror * 2 + xSep))
     result.add centerDisk
 
+proc sanityTelescopeOutput(r1, r5, pos, pos2, angle, lMirror, xSep, yL1, yL2, ySep, boreRadius: float) =
+  ## XXX: clean this up and make more useful!
+  echo "r1 = ", r1, " r5 = ", r5, " r5 - r1 = ", r5 - r1, " i = ", i, " pos = ", pos, " pos2 = ", pos2
+  block Sanity:
+    let yCenter = tan(2 * angle.degToRad) * (lMirror + xsep)
+    echo "yCenter value = ", yCenter, " compare to 'working' ", - (yL2) - (yL1) - ySep, " compare 'correct' = ", - (yL2/2) - (yL1/2) - ySep
+    let yOffset = (r1 - (sin(angle.degToRad) * lMirror) / 2.0) + boreRadius - pos
+    echo "Offset for layer ", i, " should be: ", yOffset, " \n==============================\n\n"
 
 proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope, usePerfectMirror: bool): HittablesList =
   ## Constructs the actual LLNL telescope
+  ##
+  ## Pos for the 'first' layers should be correct, under the following two conditions:
+  ## 1. it's not entirely clear what part of the telescope really should align with the bottom edge of the magnet.
+  ##    Currently the center of the front shell is aligned with the bottom.
+  ## 2. it's not clear what part of the shells should align vertically as discussed with Julia and Jaime in Cristinas office.
+  ##    The front? The center? The back? Currently I align at the center.
+  const sanity = false
   let
     lMirror = tel.lMirror
     xSep = tel.xSep
   let perfectMirror = initMaterial(initMetal(color(1.0, 0.0, 0.0), 0.0))
   ## Imperfect value assuming a 'figure error similar to NuSTAR of 1 arcmin'
   ## -> tan(1 ArcMin) (because fuzz added to unit vector)
-  const ImperfectVal = 0.0002908880082045767 # 0.0005
+  const ImperfectVal = 0.0002908880082045767
   let imperfectMirror = initMaterial(initMetal(color(1.0, 0.0, 0.0), ImperfectVal))
-  echo "USING PERFECT MIRROR?? ", usePerfectMirror
   let mat = if usePerfectMirror: perfectMirror else: imperfectMirror
 
   let r1_0 = tel.allR1[0]
@@ -1031,30 +1045,18 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope, usePerfectMirr
     let
       r1 = tel.allR1[i]
       r5 = tel.allR5[i]
-      ## XXX: this makes it "work"!
-      angle = tel.allAngles[i] # * 1.02
+      angle = tel.allAngles[i] ## * 1.02 yields 1500mm focal length
       r4 = r5 + lMirror * sin(3.0 * angle.degToRad)
     let (ySep, yL1, yL2) = calcYlYsep(angle, xSep, lMirror)
-    ## Pos for the 'first' layers should be correct, under the following two conditions:
-    ## 1. it's not entirely clear what part of the telescope really should align with the bottom edge of the magnet.
-    ##    Currently the center of the front shell is aligned with the bottom.
-    ## 2. it's not clear what part of the shells should align vertically as discussed with Julia and Jaime in Cristinas office.
-    ##    The front? The center? The back? Currently I align at the center.
-    let y11 = (r1 - r1_0) + 0 # 0 because coordinate origin at layer 0 center. So at layer
-                              # i the shell edge towards the magnet is at y11 above 0
-    ## XXX: should this be moved up by another half to align end with magnet bore?
-    let pos = y11 - sin(angle.degToRad) * lMirror/2
+    # `pos`, `pos2` are the `y` positions of first & second set of mirrors.
+    let pos = (r1 - r1_0) ## Only shift each layer relative to first layer. Other displacement done in `setCone`
     let pos2 = pos - yL1 / 2.0 - yL2 / 2.0 - ySep
-    echo "r1 = ", r1, " r5 = ", r5, " r5 - r1 = ", r5 - r1, " i = ", i, " pos = ", pos, " pos2 = ", pos2
-    block Sanity:
-      let yCenter = tan(2 * angle.degToRad) * (lMirror + xsep)
-      echo "yCenter value = ", yCenter, " compare to 'working' ", - (yL2) - (yL1) - ySep, " compare 'correct' = ", - (yL2/2) - (yL1/2) - ySep
-
-      let yOffset = (r1 - (sin(angle.degToRad) * lMirror) / 2.0) + magnet.radius - pos
-      echo "Offset for layer ", i, " should be: ", yOffset, " \n==============================\n\n"
+    if sanity:
+      sanityTelescopeOutput(r1, r5, pos, pos2, angle, lMirror, xSep, yL1, yL2, ySep, magnet.radius)
     proc setCone(r, angle, y, z: float, mat: Material): Hittable =
-      ## XXX: merge `yL` with the same subtracted from `pos` above!
-      let yL = (sin(angle.degToRad) * lMirror) / 2.0 # The y displacement from front to center of mirror
+      # `xOffset` is the displacement from front to center of mirror (x because cone with `phiMax`
+      # starts from x = 0)
+      let xOffset = (sin(angle.degToRad) * lMirror) / 2.0
       let height = calcHeight(r, angle) # total height of the cone that yields required radius and angle
       proc cone(r, h: float): Cone =
         result = Cone(radius: r, height: h, zMax: lMirror,
@@ -1064,13 +1066,11 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope, usePerfectMirr
                           phiMax: tel.mirrorSize.degToRad, mat: mat)
       let c = cone(r, height)
       #let c = cyl(r, height) ## To construct a fake telescope
-      echo "Translating down by : ", y
-      # for the regular telescope first move to -r + yL to rotate around center of layer. Full no movement
-
-      let xOffset = if fullTelescope: 0.0 else: -r + yL
+      # for the regular telescope first move to -r + xOffset to rotate around center of layer. Full no movement
+      let xOrigin = if fullTelescope: 0.0 else: -r + xOffset # aligns *center* of mirror
       let yOffset = if fullTelescope: 0.0 else: y - magnet.radius # move down by bore radius & offset
       var h = c.rotateZ(tel.mirrorSize / 2.0) # rotate out half the miror size to center "top" of mirror
-        .translate(vec3(xOffset, 0.0, -lMirror / 2.0)) # move to its center
+        .translate(vec3(xOrigin, 0.0, -lMirror / 2.0)) # move to its center
         #.rotateY(angle) ## For a cylinder telescope
         .rotateX(180.0) # we consider from magnet!
         .rotateZ(-90.0)
