@@ -214,7 +214,41 @@ You get this scene if you use the ~--llnl --llnlTwice~ command.
 
 - [ ] Add ~ImageSensorRGB~ which stores the colors in each pixel. That
   way can give each layer a color, e.g. using ggplot2 colors and then
-  can tell where rays from each layer end up on the sensor!  
+  can tell where rays from each layer end up on the sensor!
+
+- [ ] Implement an ~ImageSensorVolume~ thing.  Then sample a
+  conversion point at that distance and take the projected point as
+  the point hit on the actual readout! This allows us to do simplified
+  gas detectors. How? Material of the 'box' would be the volume. If
+  hit, sample a conversion point given gas (setup initially) and ray
+  energy. Based on that, propagate the corresponding distance and
+  activate pixel at the 'bottom'! I like this idea.
+  *WE COULD EVEN* couple this idea with our fake event generator! For
+  each conversion point generate an event and process!
+  -> If we did that we could have a real time event simulator, lol, by
+  resetting the ~ImageSensorVolume~ and lowering the of rays shot to
+  the detector!
+  -> *Well*: Downside is of course that the camera still has to sample
+  rays to see what is shown on the ~ImageSensorVolume~ in the live
+  event display. For that we need multiple second exposures to see
+  stuff after all. Combining that makes it not very live anymore. We
+  would need some way to directly map image sensor data to the
+  camera. That _might_ not be too hard if we had something more like a
+  raycasting approach to the ~ImageSensor~. I.e. before tracing a ray
+  in the classical approach, do a test ray cast and see if we hit a
+  pixel and in that case neglect the actual raytracing?
+  But aren't we already doing that in some sense? If we hit an
+  ImageSensor we don't actually continue. Ah! But we still check
+  *everything* in the scene to be sure nothing is closer than the
+  sensor! I guess that makes it slow? Need the bounding boxes working!
+  -> Fixing those should make sampling towards the image sensor very
+  fast, if my theory is correct.
+  
+
+- [ ] Add new shape that allows subtracting one shape from
+  another. I.e. have a rectangle and subtract a disk from the center.
+  Should be easy, just combine their individual ~hit~ using boolean
+  logic. Subtraction is: hitsA and not hitsB for example.  
 
 - [ ] *ADD SANITY CHECK* that checks that in our current model indeed
   the bottom part of layer i+1 is perfectly flush with the top part of
