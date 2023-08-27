@@ -971,10 +971,13 @@ proc imageSensor(tel: Telescope, magnet: Magnet,
   let imSensor = toMaterial(initImageSensor(400, 400))
   #let screen = initBox(point(-200, -200, -0.1), point(200, 200, 0.1), imSensor)
   #let screen = initBox(point(-10, -10, -0.1), point(10, 10, 0.1), imSensor)
-  result = initBox(point(-sensorW/2, -sensorH/2, -sensorThickness/2),
-                   point( sensorW/2,  sensorH/2,  sensorThickness/2),
-                   imSensor) # we sink ot so that the box becomes the memory owner of the buffer
-                                  # otherwise `imSensor` goes out of scope and frees buffer!
+  result.add initBox(point(-sensorW/2, -sensorH/2, -sensorThickness/2),
+                     point( sensorW/2,  sensorH/2,  sensorThickness/2),
+                     imSensor) # we sink ot so that the box becomes the memory owner of the buffer
+                               # otherwise `imSensor` goes out of scope and frees buffer!
+  let target = llnlFocalPoint(tel, rayAt, fullTelescope)
+  result = result
+    .rotateZ(telescopeRotation)
     .translate(target)
 
 proc gridLines(tel: Telescope, magnet: Magnet): HittablesList =
@@ -1134,7 +1137,15 @@ proc initSetup(fullTelescope: static bool): (Telescope, Magnet) =
 
 proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
                solarModelFile: string,
-               rayAt = 1.0): HittablesList =
+               rayAt = 1.0,
+               setupRotation = 90.0, # Angle the entire setup is rotated. This is the rotation to bring the downward pointing
+                                     # setup to the realistic sideways setup.
+               telescopeRotation = 14.17, # *Additional* rotation of the telescope on top of `setupRotation`.
+                                          # Separate to include real rotation aside from pointing the entire setup.
+               windowRotation = 30.0,
+               windowZOffset = 3.0,
+               ignoreWindow = false
+              ): HittablesList =
   ## Mirrors centered at lMirror/2.
   ## Entire telescope
   ##   lMirror  xsep  lMirror
@@ -1157,19 +1168,18 @@ proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, 
   objs.add lightSource(llnl, magnet, magnetPos, sourceKind, visibleTarget, solarModelFile)
   objs.add magnetBore(magnet, magnetPos)
   if gridLines:
-    ## XXX: fix adding `HittablesList` to another!
     objs.add gridLines(llnl, magnet)
-  objs.add imageSensor(llnl, magnet, fullTelescope = false, rayAt = rayAt)
-  #  .translate(vec3(0.0,+7.0,0.0))
-  var telescope = initHittables()
-  telescope.add graphiteSpacer(llnl, magnet, fullTelescope = false)
-  telescope.add llnlTelescope(llnl, magnet, fullTelescope = false, usePerfectMirror = usePerfectMirror)
-  objs.add telescope
-  #  .rotateZ(90.0 - 12)
-  ### Materials
-  #let redMaterial = initMaterial(initLambertian(color(0.7, 0.1, 0.1)))
-  #let greenMaterial = initMaterial(initLambertian(color(0.1, 0.7, 0.1)))
-
+  var telescopeImSensor = initHittables()
+  # Add the image sensor and potentially window strongback
+  telescopeImSensor.add imageSensor(llnl, magnet, fullTelescope = false,
+                                    rayAt = rayAt, telescopeRotation = telescopeRotation,
+                                    sensorW = 10.0, sensorH = 10.0,
+                                    windowRotation = windowRotation,
+                                    windowZOffset = windowZOffset, ignoreWindow = ignoreWindow)
+  telescopeImSensor.add graphiteSpacer(llnl, magnet, fullTelescope = false)
+  telescopeImSensor.add llnlTelescope(llnl, magnet, fullTelescope = false, usePerfectMirror = usePerfectMirror)
+  objs.add telescopeImSensor
+    .rotateZ(setupRotation - telescopeRotation)
   ## XXX: BVH node of the telescope is currently broken! Bad shading.
   #result.add telescope #rnd.initBvhNode(telescope)
   result.add objs
@@ -1195,15 +1205,11 @@ proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: b
   var objs = initHittables(0)
 
   objs.add earth()
-  #objs.add lightSource(llnl, magnet, magnetPos, sourceKind, visibleTarget, solarModelFile)
   if gridLines:
-    ## XXX: fix adding `HittablesList` to another!
     objs.add gridLines(llnl, magnet)
   objs.add imageSensor(llnl, magnet, fullTelescope = true) ## Don't want y displacement, the two bores are rotated by 90°
                                                            ## so focal spot is on y = 0
-
   var telMag = initHittables()
-
   case sourceKind
   of skSun: objs.add sun(solarModelFile) ## Only a single sun in center x/y! Hence add to `objs` so not duplicated
   of skXrayFinger, skParallelXrayFinger:
@@ -1219,14 +1225,9 @@ proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: b
     .translate(vec3(-83.0, 0.0, 0.0))
   objs.add telMag.rotateZ(90.0)
     .translate(vec3(83.0, 0.0, 0.0))
-  ### Materials
-  #let redMaterial = initMaterial(initLambertian(color(0.7, 0.1, 0.1)))
-  #let greenMaterial = initMaterial(initLambertian(color(0.1, 0.7, 0.1)))
-
   ## XXX: BVH node of the telescope is currently broken! Bad shading.
   #result.add telescope #rnd.initBvhNode(telescope)
   result.add objs
-
 
 proc sceneLLNLFullTelescope(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
                             solarModelFile: string,
@@ -1248,19 +1249,17 @@ proc sceneLLNLFullTelescope(rnd: var Rand, visibleTarget, gridLines, usePerfectM
   let magnetPos = llnl.length + telescopeMagnetZOffset
 
   var objs = initHittables(0)
-
   objs.add earth()
   objs.add lightSource(llnl, magnet, magnetPos, sourceKind, visibleTarget, solarModelFile)
   objs.add magnetBore(magnet, magnetPos)
   if gridLines:
-    ## XXX: fix adding `HittablesList` to another!
     objs.add gridLines(llnl, magnet)
   objs.add imageSensor(llnl, magnet, fullTelescope = true, rayAt = rayAt)
 
   var telescope = initHittables()
   telescope.add graphiteSpacer(llnl, magnet, fullTelescope = true)
   telescope.add llnlTelescope(llnl, magnet, fullTelescope = true, usePerfectMirror = usePerfectMirror)
-  objs.add telescope # .rotateX(-0.5)
+  objs.add telescope
 
   ## XXX: BVH node of the telescope is currently broken! Bad shading.
   #result.add telescope #rnd.initBvhNode(telescope)
@@ -1284,7 +1283,13 @@ proc main(width = 600,
           sourceKind = skSun,
           solarModelFile = "",
           nJobs = 16,
-          rayAt = 1.0) =
+          rayAt = 1.0,
+          setupRotation = 90.0,
+          telescopeRotation = 14.17,
+          windowRotation = 30.0,
+          windowZOffset = 3.0,
+          ignoreWindow = false,
+         ) =
   # Image
   THREADS = nJobs
   #const ratio = 16.0 / 9.0 #16.0 / 9.0
@@ -1322,7 +1327,8 @@ proc main(width = 600,
       world = rnd.sceneLLNLTwice(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile)
     else:
       echo "Visible target? ", visibleTarget
-      world = rnd.sceneLLNL(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile, rayAt)
+      world = rnd.sceneLLNL(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile, rayAt,
+                            setupRotation, telescopeRotation, windowRotation, windowZOffset, ignoreWindow)
   elif spheres:
     world = rnd.randomScene(useBvh = false) ## Currently BVH broken
     lookFrom = point(0,1.5,-2.0)

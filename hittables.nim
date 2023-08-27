@@ -1230,6 +1230,7 @@ proc getRandomPointFromSolarModel(radius: float,
     r = (0.0015 + (rIdx).float * 0.0005) * radius # in mm
   let p = rnd.randomInUnitSphere() * r
   result = Point(p)
+
 proc samplePoint*(h: Hittable, rnd: var Rand): Point {.gcsafe.}
 proc samplePoint*(s: Sphere, rnd: var Rand): Point {.gcsafe.} =
   ## Samples a random point on the sphere surface
@@ -1241,6 +1242,7 @@ proc samplePoint*(s: Sphere, rnd: var Rand): Point {.gcsafe.} =
     ## Sample uniformly from the sphere
     let p = rnd.randomInUnitSphere()
     result = Point(p * s.radius)
+
 proc samplePoint*(d: Disk, rnd: var Rand): Point {.gcsafe.} =
   ## Samples a random point on the disk surface
   result = Point(rnd.randomInUnitDisk() * d.radius)
