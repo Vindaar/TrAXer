@@ -896,21 +896,19 @@ proc magnetBore(magnet: Magnet, magnetPos: float): Hittable =
   result = Cylinder(radius: magnet.radius, zMin: 0.0, zMax: magnet.length, phiMax: 360.0.degToRad, mat: cylMetal)
     .translate(vec3(0.0, 0.0, magnetPos))
 
-proc imageSensor(tel: Telescope, magnet: Magnet,
-                 fullTelescope: bool,
-                 pixelsW = 400, pixelsH = 400,
-                 sensorW = 14.0, sensorH = 14.0,
-                           sensorThickness = 0.1,
-                           rayAt = 1.0
-                ): Hittable =
-  ## This is the correct offset for the focal spot position! It's the center of the cones for the telescope.
-  ## XXX: Sanity check:
-  ## -> Check all mirrors we install have the exact same position as an offset!!!
+proc llnlFocalPointRay(tel: Telescope, magnet: Magnet, fullTelescope: bool): Point =
+  ## Returns the ray of the given Telescope (actually assuming the LLNL for the time being)
+  ## that goes from the telescope center to the focal point. Evaluating it at any point
+  ## other than `1` via `at` yields a point along the "focal line" - a point centered
+  ## on the (possibly unfocused) image.
   let
+    #r1_0 = tel.allR1.mean # [0]
+    #α0 = tel.allAngles.mean.degToRad # [0].degToRad
     r1_0 = tel.allR1[0]
     α0 = tel.allAngles[0].degToRad
     lMirror = tel.lMirror
     xSep = tel.xSep
+    telCenter = lMirror + xSep / 2 # focal point defined from ``center`` of telescope!
   ## The focal point is at the z axis that defines the cones of the telescope.
   ## - y = 0 is the center of the bore.
   ## - Radius 1 is the radius of the cones on the magnet side. In theory it is
@@ -918,25 +916,58 @@ proc imageSensor(tel: Telescope, magnet: Magnet,
   ## - ``center`` of first lowest mirror aligns with bottom of bore. Hence `sin(α0) * lMirror / 2`
   ## For the full telescope it's simply on the z axis, as our bore radius center as well as
   ## cone centers are there.
+
+  ## XXX: I do ``not`` understand why 83 mm gives the correct alignment.
   let yOffset = if fullTelescope: 0.0
-                else: (r1_0 - sin(α0) * lMirror / 2.0) + magnet.radius
-  echo "Offset should be: ", yOffset
-  echo "Corresponds to angle = ", arctan(yOffset / (1500 + xSep / 2 + lMirror / 2)).radToDeg, " from front mirror!"
-  #let yOffset
-  echo "Corresponds to angle = ", arctan((yOffset + magnet.radius) / 1500).radToDeg
-  # calc angle
-  let telCenter = lMirror + xSep / 2 # focal point defined from ``center`` of telescope!
+                #else: r1_0 - sin(α0) * lMirror / 2 + magnet.radius #(r1_0 - sin(α0) * lMirror / 2.0) + magnet.radius
+                #else: r1_0 + sin(α0) * lMirror / 2 #(r1_0 - sin(α0) * lMirror / 2.0) + magnet.radius
+                else: 83.0 #r1_0 + sin(α0) * lMirror / 2 #(r1_0 - sin(α0) * lMirror / 2.0) + magnet.radius
+
+  block Sanity:
+    echo "TANNNN ", tan(4*α0) * 1530 #tel.focalLength # + 21.5
+    echo "Offset should be: ", yOffset
+    echo "Corresponds to angle = ", arctan(yOffset / (1500 + xSep / 2 + lMirror / 2)).radToDeg, " from front mirror!"
+    #let yOffset
+    echo "Corresponds to angle = ", arctan((yOffset + magnet.radius) / 1500).radToDeg, " it is= ", sin(α0) * lMirror / 2
+
   ## NOTE: expected offset is about -83 mm from telescope center.
-
   let p = point(0, 0, telCenter)
-  var target = point(0.0, -yOffset, - tel.focalLength + telCenter) #point(-0.5, 3, -0.5)#point(3,3,2)
+  var target = point(0.0, -yOffset, - tel.focalLength + telCenter)
 
-  let ray = initRay(p, target - p, rtCamera)
-  # move a bit
+  #let FL = 1530.0
+  #var target = point(0.0, -yOffset, - FL + telCenter)
+
+  # Construct ray from telescope center to focal point
+  result = initRay(p, target - p, rtCamera)
+
+proc llnlFocalPoint(tel: Telescope, magnet: Magnet, rayAt: float, fullTelescope: bool): Point =
+  ## Evaluate the ray that goes from telescope center to the focal point at `rayAt`.
+  ##
+  ## `rayAt` is the position `t` along the ray from the center of the telescope to the focal point
+  ## at which we evaluate it for the returned point. This allows to move the point along the
+  ## ray such that the point remains in the center of the (possibly unfocused) image.
+  let ray = llnlFocalPointRay(tel, fullTelescope)
+  # evaluate it at `rayAt`.
   echo "Old target: ", target
-  target = ray.at(rayAt)
+  result = ray.at(rayAt)
   echo "New target: ", target
 
+proc imageSensor(tel: Telescope, magnet: Magnet,
+                 fullTelescope: bool,
+                 pixelsW = 400,
+                 pixelsH = 400,
+                 sensorW = 14.0,
+                 sensorH = 14.0,
+                 sensorThickness = 0.1,
+                 rayAt = 1.0,
+                 telescopeRotation = 0.0, # Need to inverse rotate the sensor to align it *before* translating
+                 windowRotation = 30.0,
+                 windowZOffset = 3.0,
+                 ignoreWindow = false
+                ): HittablesList =
+  ## This is the correct offset for the focal spot position! It's the center of the cones for the telescope.
+  ## XXX: Sanity check:
+  ## -> Check all mirrors we install have the exact same position as an offset!!!
   let imSensor = toMaterial(initImageSensor(400, 400))
   #let screen = initBox(point(-200, -200, -0.1), point(200, 200, 0.1), imSensor)
   #let screen = initBox(point(-10, -10, -0.1), point(10, 10, 0.1), imSensor)
@@ -1082,6 +1113,25 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope, usePerfectMirr
     result.add con
     result.add con2
 
+proc initSetup(fullTelescope: static bool): (Telescope, Magnet) =
+  when not fullTelescope:
+    const
+      boreRadius = 43.0 / 2 # mm
+      length = 9.26 # m
+      telescopeMagnetZOffset = 1.0 # 1 mm
+      mirrorSize = 30.0 # 30 degree mirrors
+    result = (initTelescope(tkLLNL, mirrorSize), initMagnet(boreRadius, length))
+  else:
+    const
+      length = 9.26 # m
+      telescopeMagnetZOffset = 1.0 # 1 mm
+      mirrorSize = 360.0 # entire cones for the full telescope
+    let llnl = initTelescope(tkLLNL, mirrorSize)
+    ## For the full telescope the bore radius is the size of the outer most largest cone
+    let boreRadius = llnl.allR1[^1]
+    let magnet = initMagnet(boreRadius, length)
+    result = (llnl, magnet)
+
 proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
                solarModelFile: string,
                rayAt = 1.0): HittablesList =
@@ -1098,14 +1148,7 @@ proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, 
   ## second set of mirrors. Therefore R1 and R4 are actually relevant.
   result = initHittables(0)
   ## Constants fixed to *this* specific setup
-  const
-    boreRadius = 43.0 / 2 # mm
-    length = 9.26 # m
-    telescopeMagnetZOffset = 1.0 # 1 mm
-    mirrorSize = 30.0 # 30 degree mirrors
-
-  let llnl = initTelescope(tkLLNL, mirrorSize)
-  let magnet = initMagnet(boreRadius, length)
+  let (llnl, magnet) = initSetup(fullTelescope = false)
   let magnetPos = llnl.length + telescopeMagnetZOffset
 
   var objs = initHittables(0)
@@ -1146,14 +1189,7 @@ proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: b
   ## second set of mirrors. Therefore R1 and R4 are actually relevant.
   result = initHittables(0)
   ## Constants fixed to *this* specific setup
-  const
-    boreRadius = 43.0 / 2 # mm
-    length = 9.26 # m
-    telescopeMagnetZOffset = 1.0 # 1 mm
-    mirrorSize = 30.0 # 30 degree mirrors
-
-  let llnl = initTelescope(tkLLNL, mirrorSize)
-  let magnet = initMagnet(boreRadius, length)
+  let (llnl, magnet) = initSetup(fullTelescope = false)
   let magnetPos = llnl.length + telescopeMagnetZOffset
 
   var objs = initHittables(0)
@@ -1208,16 +1244,7 @@ proc sceneLLNLFullTelescope(rnd: var Rand, visibleTarget, gridLines, usePerfectM
   ## second set of mirrors. Therefore R1 and R4 are actually relevant.
   result = initHittables(0)
   ## Constants fixed to *this* specific setup
-  const
-    length = 9.26 # m
-    telescopeMagnetZOffset = 1.0 # 1 mm
-    mirrorSize = 360.0 # entire cones for the full telescope
-
-  let llnl = initTelescope(tkLLNL, mirrorSize)
-
-  ## For the full telescope the bore radius is the size of the outer most largest cone
-  let boreRadius = llnl.allR1[^1]
-  let magnet = initMagnet(boreRadius, length)
+  let (llnl, magnet) = initSetup(fullTelescope = true)
   let magnetPos = llnl.length + telescopeMagnetZOffset
 
   var objs = initHittables(0)
@@ -1229,34 +1256,15 @@ proc sceneLLNLFullTelescope(rnd: var Rand, visibleTarget, gridLines, usePerfectM
     ## XXX: fix adding `HittablesList` to another!
     objs.add gridLines(llnl, magnet)
   objs.add imageSensor(llnl, magnet, fullTelescope = true, rayAt = rayAt)
-  objs.add graphiteSpacer(llnl, magnet, fullTelescope = true)
-  objs.add llnlTelescope(llnl, magnet, fullTelescope = true, usePerfectMirror = usePerfectMirror)
 
-  ### Materials
-  #let redMaterial = initMaterial(initLambertian(color(0.7, 0.1, 0.1)))
-  #let greenMaterial = initMaterial(initLambertian(color(0.1, 0.7, 0.1)))
+  var telescope = initHittables()
+  telescope.add graphiteSpacer(llnl, magnet, fullTelescope = true)
+  telescope.add llnlTelescope(llnl, magnet, fullTelescope = true, usePerfectMirror = usePerfectMirror)
+  objs.add telescope # .rotateX(-0.5)
 
   ## XXX: BVH node of the telescope is currently broken! Bad shading.
   #result.add telescope #rnd.initBvhNode(telescope)
   result.add objs
-
-
-proc llnlFocalPoint(fullTelescope: bool): (Point, Point) =
-  ## XXX: UPDATE THIS
-  let lMirror = 225.0
-  let α0 = 0.579.degToRad
-  let xSep = 4.0 ## xSep is exactly 4 mm
-  let r1_0 = 63.006
-  let boreRadius = 43.0 / 2
-  let yOffset = if fullTelescope:
-                  0.0
-                else:
-                  (r1_0 - (sin(α0) * lMirror) / 2.0) + boreRadius
-  let zOffset = lMirror + xSep / 2.0
-  let focalDist = 1500.0
-  let lookFrom = point(0.0, -yOffset, - focalDist + zOffset)
-  let lookAt = point(0.0, 0.0, 0.0) # Telescope entrance/exit center is at origin
-  result = (lookFrom, lookAt)
 
 proc main(width = 600,
           maxDepth = 5,
@@ -1294,7 +1302,9 @@ proc main(width = 600,
       lookFrom = point(0.0, 0.0, -100.0) #point(-0.5, 3, -0.5)#point(3,3,2)
       lookAt = point(0.0, 0.0, 0.0) #point(0, 1.5, 2.5)#point(0,0,-1)
     elif focalPoint:
-      (lookFrom, lookAt) = llnlFocalPoint(fullTelescope or llnlTwice)
+      let (llnl, magnet) = initSetup(fullTelescope)
+      let ray = llnlFocalPointRay(llnl, magnet, fullTelescope)
+      (lookFrom, lookAt) = (ray.at(rayAt), ray.at(0.0))
     else:
       #lookFrom = point(172.2886370206074, 58.69754358408407, -14.3630844062124) #point(-0.5, 3, -0.5)#point(3,3,2)
       #lookAt = point(171.4358852563132, 58.70226619735943, -13.84078935031287) #point(0, 1.5, 2.5)#point(0,0,-1)
@@ -1303,7 +1313,6 @@ proc main(width = 600,
 
       #lookAt = point(-1262.761916124543, 33.31906554264295, -337.536110413332)
       #lookFrom = point(-1262.787318591972, 33.30606935408561, -338.5357032373016)
-
       lookAt = point(-41.23722667383358, -77.42138803689321, -1253.03504313943)
       lookFrom = point(-42.12957189166389, -77.3883974697615, -1252.584896902418)
 
