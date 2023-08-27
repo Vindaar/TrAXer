@@ -974,9 +974,10 @@ proc gridLines(tel: Telescope, magnet: Magnet): HittablesList =
 proc calcYlYsep(angle, xSep, lMirror: float): (float, float, float) =
   ## Helper to compute displacement of each set of mirrors and the y distance
   ## given by the angles due to mirror rotation
-  let ySep = tan(angle.degToRad) * (xSep / 2.0) + tan(angle.degToRad * 3) * (xSep / 2.0)
-  let yL1  = sin(angle.degToRad) * lMirror
-  let yL2  = sin(3 * angle.degToRad) * lMirror
+  let α = angle.degToRad
+  let ySep = tan(α) * (xSep / 2.0) + tan(3 * α) * (xSep / 2.0)
+  let yL1  = sin(α) * lMirror
+  let yL2  = sin(3 * α) * lMirror
   result = (ySep, yL1, yL2)
 
 proc graphiteSpacer(tel: Telescope, magnet: Magnet, fullTelescope: bool): HittablesList =
