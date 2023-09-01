@@ -1023,21 +1023,20 @@ proc imageSensor(tel: Telescope, magnet: Magnet,
                  windowRotation = 30.0,
                  windowZOffset = 3.0,
                  ignoreWindow = false,
-                 sensorKind = sCount
+                 sensorKind = sCount,
+                 posOverride = point(0,0,0)
                 ): GenericHittablesList =
   ## This is the correct offset for the focal spot position! It's the center of the cones for the telescope.
   ## XXX: Sanity check:
   ## -> Check all mirrors we install have the exact same position as an offset!!!
-  let imSensor = toMaterial(initImageSensor(400, 400, kind = sensorKind))
-  #let screen = initBox(point(-200, -200, -0.1), point(200, 200, 0.1), imSensor)
-  #let screen = initBox(point(-10, -10, -0.1), point(10, 10, 0.1), imSensor)
+  let imSensor = toMaterial(initImageSensor(pixelsW, pixelsH, kind = sensorKind))
   result.add toHittable(initBox(point(-sensorW/2, -sensorH/2, -sensorThickness/2),
                                 point( sensorW/2,  sensorH/2,  sensorThickness/2)),
-                        imSensor) # we sink ot so that the box becomes the memory owner of the buffer
-                               # otherwise `imSensor` goes out of scope and frees buffer!
+                        imSensor)
   if not ignoreWindow:
     result.add windowStrongback(windowRotation, windowZOffset)
-  let target = llnlFocalPoint(tel, magnet, rayAt, fullTelescope)
+  let target = if posOverride != point(0,0,0): posOverride
+               else: llnlFocalPoint(tel, magnet, rayAt, fullTelescope)
   result = result
     .rotateZ(telescopeRotation)
     .translate(target)
