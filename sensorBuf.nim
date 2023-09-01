@@ -5,8 +5,8 @@ type
     len*: int
     width*: int
     height*: int
-    buf*: ptr UncheckedArray[int]
-    currentMax*: ptr int
+    buf*: ptr UncheckedArray[float]
+    currentMax*: ptr float
     memOwner: bool
   Sensor2D* = ref Sensor2DObj
 
@@ -43,20 +43,20 @@ proc `=copy`(dest: var Sensor2DObj, source: Sensor2DObj) =
 
 proc initSensor*(width, height: int): Sensor2D =
   let num = width * height
-  var buf = cast[ptr UncheckedArray[int]](allocShared0(width * height * sizeof(int)))
-  var pInt = cast[ptr int](allocShared0(sizeof(int)))
-  pInt[] = 0
+  var buf = cast[ptr UncheckedArray[float]](allocShared0(width * height * sizeof(float)))
+  var pFloat = cast[ptr float](allocShared0(sizeof(float)))
+  pFloat[] = 0
   result = Sensor2D(len: num,
                     width: width,
                     height: height,
                     buf: buf,
-                    currentMax: pInt)
+                    currentMax: pFloat)
 
-proc `[]`*(s: Sensor2D, x, y: int): int =
+proc `[]`*(s: Sensor2D, x, y: int): float =
   withLock(L):
     result = s.buf[y * s.width + x]
 
-proc `[]=`*(s: Sensor2D, x, y: int, val: int) =
+proc `[]=`*(s: Sensor2D, x, y: int, val: float) =
   withLock(L):
     s.buf[y * s.width + x] = val
     if val > s.currentMax[]:
