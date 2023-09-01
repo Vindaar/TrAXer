@@ -397,7 +397,7 @@ proc renderFrame(j: int, ctx: ptr RenderContext) {.gcsafe.} =
         for _ in 0 ..< 1:
           let (r, spectrum) = ctx.rnd.sampleRay(ctx.sources, ctx.targets)
           # 2. trace it
-          let c = camera.rayColor(ctx.rnd, r, ctx.worldNoSources, maxDepth)
+          let c = camera.rayColorRecurse(ctx.rnd, r, ctx.worldXray, maxDepth, spectrum)
           # this color itself is irrelevant, but might illuminate the image sensor!
 
     ctx.counts[idx.int - frm] = ctx.counts[idx.int - frm] + 1
