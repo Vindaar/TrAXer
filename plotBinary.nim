@@ -31,8 +31,9 @@ proc main(fname, dtype, outfile: string,
           transparent = false) =
   let data = readFile(fname)
   case dtype
-  of "uint32": plotData[uint32](cast[ptr UncheckedArray[uint32]](data[0].addr), fname, outfile, transparent)
-  of "int": plotData[int](cast[ptr UncheckedArray[int]](data[0].addr), fname, outfile, transparent)
+  of "uint32": plotData(cast[ptr UncheckedArray[uint32]](data[0].addr), fname, outfile, transparent)
+  of "int": plotData(cast[ptr UncheckedArray[int]](data[0].addr), fname, outfile, transparent)
+  of "float": plotData(cast[ptr UncheckedArray[float]](data[0].addr), fname, outfile, transparent)
   else:
     doAssert false, "Data type " & $dtype & " not supported yet."
 
