@@ -254,6 +254,23 @@ You get this scene if you use the ~--llnl --llnlTwice~ command.
   the bottom part of layer i+1 is perfectly flush with the top part of
   layer i!
 
+- [ ] Implement alternative to ~sSum~ where we keep the entire flux
+  data!
+  This would allow us to directly look at the axion image at arbitrary
+  energies.
+  It would need a 3D ~Sensor3D~ to model flux as 3rd.
+  Note: when implementing that it seems a good idea to order the data
+  such that we can copy an entire Spectrum row into the sensor. So the
+  last dimension should be the flux, i.e. ~[x, y, E]~. That way
+  copying the ~Spectrum~ should be efficient, which should be the most
+  expensive operation on it.
+
+- [ ] implement toggle between XrayMatter behavior for X-rays and
+  light for ~Camera~!
+- [ ] *FIX* ~Camera~ usage of attenuation for ~XrayMatter~ when
+  calling ~eval~! Need to convert to ~RGBSpectrum~
+  
+
 *NOTE*:
 The LLNL simulation is slightly wrong in the sense that the mirrors
 actually become _smaller_ towards the end with smaller radius, because
