@@ -1,4 +1,4 @@
-import basetypes, math
+import basetypes
 
 type
   AABB* = object
