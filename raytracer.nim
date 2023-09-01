@@ -10,10 +10,10 @@ type
   RenderContext = ref object
     rnd: Rand
     camera: Camera
-    world: HittablesList
-    worldNoSources: HittablesList ## Copy of the world without any light sources.
-    sources: HittablesList ## List of all light sources
-    targets: HittablesList ## List of all targets for diffuse lights
+    world: HittablesList[RGBSpectrum]
+    worldXray: HittablesList[XraySpectrum] ## Copy of the world without any light sources.
+    sources: HittablesList[XraySpectrum] ## List of all light sources
+    targets: HittablesList[XraySpectrum] ## List of all targets for diffuse lights
     buf: ptr UncheckedArray[uint32]
     counts: ptr UncheckedArray[int]
     window: SurfacePtr
@@ -32,21 +32,21 @@ var Tracing = ttCamera
 proc initRenderContext(rnd: var Rand,
                        buf: ptr UncheckedArray[uint32], counts: ptr UncheckedArray[int],
                        window: SurfacePtr, numRays, width, height: int,
-                       camera: Camera, world: HittablesList, maxDepth: int,
+                       camera: Camera, world: GenericHittablesList, maxDepth: int,
                        numPer, numThreads: int): RenderContext =
-  var world = world
-  var worldNoSources = world.clone()
-  let sources = worldNoSources.getSources(delete = true)
-  let targets = worldNoSources.getLightTargets(delete = true)
+  var worldRGB = world.cloneAsRGB()
+  var worldXray = world.cloneAsXray()
+  let sources = worldXray.getSources(delete = true)
+  let targets = worldXray.getLightTargets(delete = true)
   # filter invisible targets
-  world.removeInvisibleTargets()
+  worldRGB.removeInvisibleTargets()
   result = RenderContext(rnd: rnd,
                          buf: buf, counts: counts,
                          window: window,
                          numRays: numRays, width: width, height: height,
                          camera: camera,
-                         world: world,
-                         worldNoSources: worldNoSources,
+                         world: worldRGB,
+                         worldXray: worldXray,
                          sources: sources,
                          targets: targets,
                          maxDepth: maxDepth,
@@ -55,7 +55,7 @@ proc initRenderContext(rnd: var Rand,
 proc initRenderContext(rnd: var Rand,
                        buf: var Tensor[uint32], counts: var Tensor[int],
                        window: SurfacePtr, numRays, width, height: int,
-                       camera: Camera, world: HittablesList, maxDepth: int,
+                       camera: Camera, world: GenericHittablesList, maxDepth: int,
                        numPer: int = -1, numThreads: int = -1): RenderContext =
   let bufP    = cast[ptr UncheckedArray[uint32]](buf.unsafe_raw_offset())
   var countsP = cast[ptr UncheckedArray[int]](counts.unsafe_raw_offset())
@@ -64,7 +64,7 @@ proc initRenderContext(rnd: var Rand,
 proc initRenderContexts(numThreads: int,
                         buf: var Tensor[uint32], counts: var Tensor[int],
                         window: SurfacePtr, numRays, width, height: int,
-                        camera: Camera, world: HittablesList, maxDepth: int): seq[RenderContext] =
+                        camera: Camera, world: GenericHittablesList, maxDepth: int): seq[RenderContext] =
   result = newSeq[RenderContext](numThreads)
   let numPer = (width * height) div numThreads
   for i in 0 ..< numThreads:
@@ -78,69 +78,73 @@ when compileOption("threads"):
   import malebolgia
 var THREADS = 16
 
-proc rayColor*(c: Camera, rnd: var Rand, r: Ray, world: HittablesList, depth: int): Color {.gcsafe.} =
-  var rec: HitRecord
+proc rayColor*[S: SomeSpectrum](c: Camera, rnd: var Rand, r: Ray, world: HittablesList[S], depth: int): S {.gcsafe.} =
+  var rec: HitRecord[S]
 
   if depth <= 0:
-    return color(0, 0, 0)
+    return toSpectrum(color(0, 0, 0), S)
 
   if world.hit(r, 0.001, Inf, rec):
     var scattered: Ray
-    var attenuation: Color
+    var attenuation: S
     var emitted = rec.mat.emit(rec.u, rec.v, rec.p)
     if not rec.mat.scatter(rnd, r, rec, attenuation, scattered):
       result = emitted
     else:
       result = attenuation * c.rayColor(rnd, scattered, world, depth - 1) + emitted
   else:
-    result = c.background
+    result = toSpectrum(c.background, S)
 
   when false: ## Old code with background gradient
     let unitDirection = unitVector(r.dir)
     let t = 0.5 * (unitDirection.y + 1.0)
     result = (1.0 - t) * color(1.0, 1.0, 1.0) + t * color(0.5, 0.7, 1.0)
 
-proc rayColorAndPos*(c: Camera, rnd: var Rand, r: Ray, initialColor: Color, world: HittablesList, depth: int): (Color, float, float) {.gcsafe.} =
-  var rec: HitRecord
+proc rayColorAndPos*[S: SomeSpectrum](c: Camera, rnd: var Rand, r: Ray,
+                                      initialColor: S, world: HittablesList[S],
+                                      depth: int): (S, float, float) {.gcsafe.} =
+  var rec: HitRecord[S]
 
   echo "Start==============================\n\n"
-  proc recurse(rec: var HitRecord, c: Camera, rnd: var Rand, r: Ray, world: HittablesList, depth: int): Color =
+  proc recurse[S: SomeSpectrum](rec: var HitRecord[S], c: Camera, rnd: var Rand,
+                                r: Ray, world: HittablesList[S], depth: int,
+                                initialColor: S): S =
     echo "Depth = ", depth
     if depth <= 0:
-      return color(0, 0, 0)
+      return toSpectrum(0, S)
 
     #var color: Color = initialColor
     result = initialColor
     if world.hit(r, 0.001, Inf, rec):
       #echo "Hit: ", rec.p, " mat: ", rec.mat, " at depth = ", depth, " rec: ", rec
       var scattered: Ray
-      var attenuation: Color
+      var attenuation: S
       var emitted = rec.mat.emit(rec.u, rec.v, rec.p)
       if rec.mat.kind == mkImageSensor:
-        result = color(1,1,1) ## Here we return 1 so that the function call above terminates correctly
+        result = toSpectrum(1, S) ## Here we return 1 so that the function call above terminates correctly
         discard
       elif not rec.mat.scatter(rnd, r, rec, attenuation, scattered):
         result = emitted
       else:
         let angle = arccos(scattered.dir.dot(rec.normal)).radToDeg
         echo "Scattering angle : ", angle
-        result = attenuation * recurse(rec, c, rnd, scattered, world, depth - 1) + emitted
+        result = attenuation * recurse(rec, c, rnd, scattered, world, depth - 1, initialColor) + emitted
         #let res =
         #if rec.mat.kind == mkImageSensor:
         #
         #else:
         #  result = attenuation * res + emitted
     else:
-      result = c.background
+      result = toSpectrum(c.background, S)
 
-  let color = recurse(rec, c, rnd, r, world, depth)
+  let color = recurse(rec, c, rnd, r, world, depth, initialColor)
   echo "------------------------------Finish\n\n"
   if rec.mat.kind == mkImageSensor: # and color != initialColor:
     ## In this case return color and position
     echo "Initial color? ", color, " rec.mat: ", rec.mat, " at ", (rec.u, rec.v)
     result = (color, rec.u, rec.v)
   else: # else just return nothing
-    result = (color(0,0,0), 0, 0)
+    result = (toSpectrum(0, S), 0, 0)
 
   when false: ## Old code with background gradient
     let unitDirection = unitVector(r.dir)
@@ -233,7 +237,7 @@ proc renderMC*(img: Image, f: string,
       f.writeColor(buf[j, i], counts[j, i])
   f.close()
 
-proc sampleRay(rnd: var Rand, sources, targets: HittablesList): (Ray, Color) {.gcsafe.} =
+proc sampleRay[S: SomeSpectrum](rnd: var Rand, sources, targets: HittablesList[S]): (Ray, S) {.gcsafe.} =
   ## Sample a ray from one of the sources
   # 1. pick a sources
   let num = sources.len
@@ -242,13 +246,13 @@ proc sampleRay(rnd: var Rand, sources, targets: HittablesList): (Ray, Color) {.g
   # 2. sample from source
   let p = samplePoint(source, rnd)
   # 3. get the color of the source
-  let initialColor = source.getMaterial.emit(0.5, 0.5, p)
-
+  let pOrigin = source.transform(p) # convert point back to object space to get point from center of source
+  let spectrum = source.getMaterial.emitAxion(pOrigin, source.getRadius())
   # 4. depending on the source material choose direction
   case source.getMaterial.kind
   of mkLaser: # lasers just sample along the normal of the material
     let dir = vec3(0.0, 0.0, -1.0) ## XXX: make this the normal surface!
-    result = (initRay(p, dir, rtLight), initialColor)
+    result = (initRay(p, dir, rtLight), spectrum)
   of mkDiffuseLight, mkSolarEmission: # diffuse light need a target
     let numT = targets.len
     if numT == 0:
@@ -263,7 +267,7 @@ proc sampleRay(rnd: var Rand, sources, targets: HittablesList): (Ray, Color) {.g
     #echo "Initial origin: ", p
     var ray = initRay(p, dir, rtLight)
     ray.orig = ray.at((targetP - p).length() - 1.0)
-    result = (ray, initialColor)
+    result = (ray, spectrum)
 
     when false:# true:
       block SanityCheck: # Check the produced ray actually hits the target
@@ -301,13 +305,13 @@ proc renderSdlFrame(ctx: RenderContext) =
       # 1. get a ray from a source
       let (r, initialColor) = ctx.rnd.sampleRay(ctx.sources, ctx.targets)
       # 2. trace it. Check if ray ended up on `ImageSensor`
-      let (c, u, v) = camera.rayColorAndPos(ctx.rnd, r, initialColor, ctx.world, maxDepth)
-      if c.r == 0 and c.g == 0 and c.b == 0: continue # skip to next ray!
+      let (c, u, v) = camera.rayColorAndPos(ctx.rnd, r, initialColor, ctx.worldXray, maxDepth)
+      if c.isBlack: continue
       #echo r
       #echo "empty?? ", c, " at ", (u, v)
 
       # 3. if so, get the relative position on sensor, map to x/y
-      color = c
+      color = toColor c
       xIdx = clamp((u * (width.float - 1.0)).round.int, 0, width)
       yIdx = clamp((v * (height.float - 1.0)).round.int, 0, height)
 
@@ -350,13 +354,13 @@ proc renderFrame(j: int, ctx: ptr RenderContext) {.gcsafe.} =
     #if x.int >= window.w: continue
     #if y.int >= window.h: continue
     let r = camera.getRay(ctx.rnd, x.int, y.int)
-    let color = camera.rayColor(ctx.rnd, r, ctx.world, maxDepth)
+    let color = toColor camera.rayColor(ctx.rnd, r, ctx.world, maxDepth)
 
     block LightSources:
       # 1. get a ray from a source
       if ctx.sources.len > 0:
         for _ in 0 ..< 1:
-          let (r, initialColor) = ctx.rnd.sampleRay(ctx.sources, ctx.targets)
+          let (r, spectrum) = ctx.rnd.sampleRay(ctx.sources, ctx.targets)
           # 2. trace it
           let c = camera.rayColor(ctx.rnd, r, ctx.worldNoSources, maxDepth)
           # this color itself is irrelevant, but might illuminate the image sensor!
@@ -403,7 +407,7 @@ from std / times import now, `$`
 import ggplotnim except Point, Color, colortypes, color
 
 
-proc renderSdl*(img: Image, world: var HittablesList,
+proc renderSdl*(img: Image, world: GenericHittablesList,
                 rnd: var Rand, # the *main thread* RNG
                 camera: Camera,
                 samplesPerPixel, maxDepth: int,
@@ -624,8 +628,8 @@ proc renderSdl*(img: Image, world: var HittablesList,
     sdl2.present(renderer)
   sdl2.quit()
 
-proc sceneRedBlue(): HittablesList =
-  result = initHittables(0)
+proc sceneRedBlue(): GenericHittablesList =
+  result = initGenericHittables()
   let R = cos(Pi/4.0)
 
   #world.add Sphere(center: point(0, 0, -1), radius: 0.5)
@@ -634,95 +638,96 @@ proc sceneRedBlue(): HittablesList =
   let matLeft = initMaterial(initLambertian(color(0,0,1)))
   let matRight = initMaterial(initLambertian(color(1,0,0)))
 
-  result.add translate(vec3(-R, 0.0, -1.0), Sphere(radius: R, mat: matLeft))
-  result.add translate(vec3(R, 0, -1), Sphere(radius: R, mat: matRight))
+  result.add translate(vec3(-R, 0.0, -1.0), toHittable(Sphere(radius: R), matLeft))
+  result.add translate(vec3(R, 0, -1), toHittable(Sphere(radius: R), matRight))
 
-proc mixOfSpheres(): HittablesList =
-  result = initHittables(0)
+proc mixOfSpheres(): GenericHittablesList =
+  result = initGenericHittables()
   let matGround = initMaterial(initLambertian(color(0.8, 0.8, 0.0)))
   let matCenter = initMaterial(initLambertian(color(0.1, 0.2, 0.5)))
   # let matLeft = initMaterial(initMetal(color(0.8, 0.8, 0.8), 0.3))
   let matLeft = initMaterial(initDielectric(1.5))
   let matRight = initMaterial(initMetal(color(0.8, 0.6, 0.2), 1.0))
 
-  result.add translate(vec3(0.0, -100.5, -1), Sphere(radius: 100, mat: matGround))
-  result.add translate(vec3(0.0, 0.0, -1), Sphere(radius: 0.5, mat: matCenter))
-  result.add translate(vec3(-1.0, 0.0, -1), Sphere(radius: 0.5, mat: matLeft))
-  result.add translate(vec3(-1.0, 0.0, -1), Sphere(radius: -0.4, mat: matLeft))
-  result.add translate(vec3(1.0, 0.0, -1), Sphere(radius: 0.5, mat: matRight))
+  result.add translate(vec3(0.0, -100.5, -1), toHittable(Sphere(radius: 100), matGround))
+  result.add translate(vec3(0.0, 0.0, -1), toHittable(Sphere(radius: 0.5), matCenter))
+  result.add translate(vec3(-1.0, 0.0, -1), toHittable(Sphere(radius: 0.5), matLeft))
+  result.add translate(vec3(-1.0, 0.0, -1), toHittable(Sphere(radius: -0.4), matLeft))
+  result.add translate(vec3(1.0, 0.0, -1), toHittable(Sphere(radius: 0.5), matRight))
 
-proc randomSpheres(rnd: var Rand, numBalls: int): HittablesList =
-  result = initHittables(0)
+proc randomSpheres(rnd: var Rand, numBalls: int): HittablesList[RGBSpectrum] =
+  result = initHittables[RGBSpectrum]()
   for a in -numBalls ..< numBalls:
     for b in -numBalls ..< numBalls:
       let chooseMat = rnd.rand(1.0)
       var center = point(a.float + 0.9 * rnd.rand(1.0), 0.2, b.float + 0.9 * rnd.rand(1.0))
 
       if (center - point(4, 0.2, 0)).length() > 0.9:
-        var sphereMaterial: Material
+        var sphereMaterial: Material[RGBSpectrum]
         if chooseMat < 0.8:
           # diffuse
           let albedo = rnd.randomVec().Color * rnd.randomVec().Color
           sphereMaterial = initMaterial(initLambertian(albedo))
-          result.add translate(center, Sphere(radius: 0.2, mat: sphereMaterial))
+          result.add translate(center, toHittable(Sphere(radius: 0.2), sphereMaterial))
         elif chooseMat < 0.95:
           # metal
           let albedo = rnd.randomVec(0.5, 1.0).Color
           let fuzz = rnd.rand(0.0 .. 0.5)
           sphereMaterial = initMaterial(initMetal(albedo, fuzz))
-          result.add translate(center, Sphere(radius: 0.2, mat: sphereMaterial))
+          result.add translate(center, toHittable(Sphere(radius: 0.2), sphereMaterial))
         else:
           # glass
           sphereMaterial = initMaterial(initDielectric(1.5))
-          result.add translate(center, Sphere(radius: 0.2, mat: sphereMaterial))
+          result.add translate(center, toHittable(Sphere(radius: 0.2), sphereMaterial))
 
-proc randomScene(rnd: var Rand, useBvh = true, numBalls = 11): HittablesList =
+proc randomScene(rnd: var Rand, useBvh = true, numBalls = 11): GenericHittablesList =
   ## XXX: the BVH is also broken here :) Guess we just broke it completely, haha.
-  result = initHittables(0)
+  result = initGenericHittables()
 
   let groundMaterial = initMaterial(initLambertian(color(0.5, 0.5, 0.5)))
-  result.add translate(vec3(0.0, -1000.0, 0.0), Sphere(radius: 1000, mat: groundMaterial))
+  result.add translate(vec3(0.0, -1000.0, 0.0), toHittable(Sphere(radius: 1000), groundMaterial))
 
   let smallSpheres = rnd.randomSpheres(numBalls)
   if useBvh:
-    result.add rnd.initBvhNode(smallSpheres)
+    result.add toHittable(rnd.initBvhNode(smallSpheres))
   else:
     result.add smallSpheres
 
   let mat1 = initMaterial(initDielectric(1.5))
-  result.add translate(vec3(0.0, 1.0, 0.0), Sphere(radius: 1.0, mat: mat1))
+  result.add translate(vec3(0.0, 1.0, 0.0), toHittable(Sphere(radius: 1.0), mat1))
 
   let mat2 = initMaterial(initLambertian(color(0.4, 0.2, 0.1)))
-  result.add translate(vec3(-4.0, 1.0, 0.0), Sphere(radius: 1.0, mat: mat2))
+  result.add translate(vec3(-4.0, 1.0, 0.0), toHittable(Sphere(radius: 1.0), mat2))
 
   let mat3 = initMaterial(initMetal(color(0.7, 0.6, 0.5), 0.0))
-  result.add translate(vec3(4.0, 1.0, 0.0), Sphere(radius: 1.0, mat: mat3))
+  result.add translate(vec3(4.0, 1.0, 0.0), toHittable(Sphere(radius: 1.0), mat3))
 
-proc sceneCast(): HittablesList =
-  result = initHittables(0)
+proc sceneCast(): GenericHittablesList =
+  result = initGenericHittables()
 
   let groundMaterial = initMaterial(initLambertian(color(0.2, 0.7, 0.2)))
   let EarthR = 6_371_000.0
-  result.add translate(vec3(0.0, -EarthR - 5, 0.0), Sphere(radius: EarthR, mat: groundMaterial))
+  result.add translate(vec3(0.0, -EarthR - 5, 0.0), toHittable(Sphere(radius: EarthR), groundMaterial))
 
   #let concrete = initMaterial(initLambertian(color(0.5, 0.5, 0.5)))
   #let airportWall = initXyRect(-10, 0, 0, 10, 10, mat = concrete)
   #result.add airportWall
 
   let strMetal = initMaterial(initMetal(color(0.6, 0.6, 0.6), 0.2))
-  let telBox = rotateX(initBox(point(-2, 1.5, 4), point(0, 1.75, 5.5), strMetal), 30.0)
+  let telBox = rotateX(toHittable(initBox(point(-2, 1.5, 4), point(0, 1.75, 5.5)),
+                                  strMetal), 30.0)
   result.add telBox
 
   let concreteMaterial = initMaterial(initLambertian(color(0.6, 0.6, 0.6)))
-  let controlRoom = initBox(point(1, 0.0, 0.0), point(4, 2.2, 2.2), concreteMaterial)
+  let controlRoom = toHittable(initBox(point(1, 0.0, 0.0), point(4, 2.2, 2.2)), concreteMaterial)
   result.add controlRoom
 
   let floorMaterial = initMaterial(initLambertian(color(0.7, 0.7, 0.7)))
-  let upperFloor = initBox(point(-4, 0.0, -100), point(20, 2.0, 0), floorMaterial)
+  let upperFloor = toHittable(initBox(point(-4, 0.0, -100), point(20, 2.0, 0)), floorMaterial)
   result.add upperFloor
 
   let glass = initMaterial(initDielectric(1.5))
-  let railing = initBox(point(-4, 2.0, -0.1), point(10, 2.6, 0), floorMaterial)
+  let railing = toHittable(initBox(point(-4, 2.0, -0.1), point(10, 2.6, 0)), floorMaterial)
   result.add railing
 
   let SunR = 695_700_000.0
@@ -730,27 +735,24 @@ proc sceneCast(): HittablesList =
   let pos = point(AU / 10.0, AU / 10.0, AU).normalize * AU
   echo pos.repr
   let sunMat = initMaterial(initLambertian(color(1.0, 1.0, 0.0)))
-  result.add translate(pos, Sphere(radius: SunR, mat: sunMat))
+  result.add translate(pos, toHittable(Sphere(radius: SunR), sunMat))
 
-  #result.add Disk(distance: 3.3, radius: 10.0, mat: concreteMaterial)
+  #result.add toHittable(Disk(distance: 3.3, radius: 10.0), concreteMaterial)
 
-  for x in result:
-    echo x.repr
-
-proc sceneDisk(): HittablesList =
-  result = initHittables(0)
+proc sceneDisk(): GenericHittablesList =
+  result = initGenericHittables()
   let groundMaterial = initMaterial(initLambertian(color(0.2, 0.7, 0.2)))
-  result.add Disk(distance: 1.5, radius: 1.5, mat: groundMaterial)
+  result.add toHittable(Disk(distance: 1.5, radius: 1.5), groundMaterial)
 
-proc sceneTest(rnd: var Rand): HittablesList =
-  result = initHittables(0)
+proc sceneTest(rnd: var Rand): GenericHittablesList =
+  result = initGenericHittables()
 
   let groundMaterial = initMaterial(initLambertian(color(0.2, 0.7, 0.2)))
   let EarthR = 6_371_000.0
-  result.add translate(point(0, -EarthR - 5, 0), Sphere(radius: EarthR, mat: groundMaterial))
+  result.add translate(point(0, -EarthR - 5, 0), toHittable(Sphere(radius: EarthR), groundMaterial))
 
   let smallSpheres = rnd.randomSpheres(3)
-  result.add rnd.initBvhNode(smallSpheres)
+  result.add toHittable(rnd.initBvhNode(smallSpheres))
 
   let matBox = initMaterial(initLambertian(color(1,0,0)))
 
@@ -784,9 +786,9 @@ proc sceneTest(rnd: var Rand): HittablesList =
     result.add telBox2
 
   let cylMetal = initMaterial(initMetal(color(0.6, 0.6, 0.6), 0.2))
-  #let cyl = Cylinder(radius: 3.0, zMin: 0.0, zMax: 5.0, phiMax: 180.0.degToRad, mat: cylMetal)
-  let cyl = Cone(radius: 3.0, zMax: 4.0, height: 5.0, phiMax: 360.0.degToRad, mat: cylMetal)
-  #let cyl = Sphere(radius: 3.0, mat: cylMetal)
+  #let cyl = Cylinder(radius: 3.0, zMin: 0.0, zMax: 5.0, phiMax: 180.0.degToRad), cylMetal)
+  let cyl = toHittable(Cone(radius: 3.0, zMax: 4.0, height: 5.0, phiMax: 360.0.degToRad), cylMetal)
+  #let cyl = toHittable(Sphere(radius: 3.0), cylMetal)
   let center = vec3(0'f64, 0'f64, 0'f64)#vec3(0.5, 0.5, 0.5)
   let h = rotateX(#cyl,
       translate(
@@ -798,12 +800,12 @@ proc sceneTest(rnd: var Rand): HittablesList =
   #
   #let conMetal = initMaterial(initMetal(color(0.9, 0.9, 0.9), 0.2))
   #let con = translate(vec3(3.0, 3.0, 0.0),
-  #                    Cone(radius: 2.0, height: 5.0, zMax: 3.0, phiMax: 180.0.degToRad, mat: conMetal))
+  #                    Cone(radius: 2.0, height: 5.0, zMax: 3.0, phiMax: 180.0.degToRad), conMetal))
   #result.add con
 
-  #let ball0 = translate(vec3(1.0, -2.0, -4.0), Sphere(radius: 1.5, mat: strMetal))
-  #let ball1 = translate(vec3(1.0, 1.0, 1.0), rotateZ(Sphere(radius: 1.5, mat: strMetal), 0.0))
-  #let ball2 = translate(vec3(1.0, 1.0, 1.0), rotateZ(Sphere(radius: 1.5, mat: strMetal), 30.0))
+  #let ball0 = translate(vec3(1.0, -2.0, -4.0), toHittable(Sphere(radius: 1.5), strMetal))
+  #let ball1 = translate(vec3(1.0, 1.0, 1.0), rotateZ(toHittable(Sphere(radius: 1.5), strMetal), 0.0))
+  #let ball2 = translate(vec3(1.0, 1.0, 1.0), rotateZ(toHittable(Sphere(radius: 1.5), strMetal), 30.0))
   #result.add ball0
   #result.add ball2
 
@@ -816,26 +818,30 @@ from std/stats import mean
 
 import sensorBuf, telescopes
 
-proc earth(): Hittable =
+proc earth(): Hittable[RGBSpectrum] =
   ## Adds the Earth as a ground. It's only 6.371 km large here :) Why? Who knows.
   let groundMaterial = initMaterial(initLambertian(color(0.2, 0.7, 0.2)))
   const EarthR = 6_371_000.0 # Meter, not MilliMeter, but we keep it...
-  result = translate(point(0, -EarthR - 5000, 0), Sphere(radius: EarthR, mat: groundMaterial))
+  result = translate(point(0, -EarthR - 5000, 0), toHittable(Sphere(radius: EarthR), groundMaterial))
 
 type
   SourceKind = enum
     skSun, skXrayFinger, skParallelXrayFinger
 
 import fluxCdf
-proc sun(solarModelFile: string): Hittable =
+proc sun(solarModelFile: string): Hittable[XraySpectrum] =
   ## Adds the Sun
   let sunColor = color(1.0, 1.0, 0.5)
   let sunMaterial = if solarModelFile.len == 0:
-                      initMaterial(initDiffuseLight(sunColor))
+                      toSpectrum(initMaterial(initDiffuseLight(sunColor)), XraySpectrum)
                     else:
+                      let fluxData = getFluxRadiusCDF(solarModelFile)
                       initMaterial(
                         initSolarEmission(sunColor,
-                                          getFluxRadiusCDF(solarModelFile)
+                                          fluxData.fRCdf,
+                                          fluxData.diffFluxR,
+                                          fluxData.radii,
+                                          fluxData.energyMin, fluxData.energyMax
                         )
                       )
 
@@ -845,37 +851,38 @@ proc sun(solarModelFile: string): Hittable =
     ## DTU PhD mentions 3 arcmin source. tan(3' / 2) * 1 AU = 0.0937389
     SunR *= 0.0937389 #0.20 # only inner 20% contribute, i.e. make the sphere smaller for diffuse light
   ## XXX: in principle need to apply correct x AU distance here if `solarModelFile` supplied!
-  result = translate(point(0, 0, AU), Sphere(radius: SunR, mat: sunMaterial))
+  result = translate(point(0, 0, AU), toHittable(Sphere(radius: SunR), sunMaterial))
 
-proc xrayFinger(tel: Telescope, magnet: Magnet, magnetPos: float, kind: SourceKind): Hittable =
+proc xrayFinger(tel: Telescope, magnet: Magnet, magnetPos: float, kind: SourceKind): Hittable[XraySpectrum] =
   ## Adds an X-ray finger
   ## Define the X-ray source
   case kind
   of skParallelXrayFinger:
-    let sunMaterial = initMaterial(initLaser(color(1.0, 1.0, 0.5)))
-    result = translate(point(0, 0, magnetPos + 9.26 * 1000.0), Disk(distance: 0.0, radius: magnet.radius, mat: sunMaterial))
-    #result = translate(point(0, 0, magnetPos + 9.26 * 1000.0 + 100_000.0), Disk(distance: 0.0, radius: magnet.radius, mat: sunMaterial))
+    let sunMaterial = toSpectrum(initMaterial(initLaser(color(1.0, 1.0, 0.5))), XraySpectrum)
+    result = translate(point(0, 0, magnetPos + 9.26 * 1000.0), toHittable(Disk(distance: 0.0, radius: magnet.radius), sunMaterial))
+    #result = translate(point(0, 0, magnetPos + 9.26 * 1000.0 + 100_000.0), toHittable(Disk(distance: 0.0, radius: magnet.radius), sunMaterial))
   of skXrayFinger: # classical emission allowing all angles
     ## X-ray finger as mentioned in the PhD thesis of A. Jakobsen (14.2 m distance, 3 mm radius)
-    let sunMaterial = initMaterial(initDiffuseLight(color(1.0, 1.0, 0.5)))
-    result = translate(point(0, 0, magnetPos + 14.2 * 1000.0), Disk(distance: 0.0, radius: 3.0, mat: sunMaterial))
+    let sunMaterial = toSpectrum(initMaterial(initDiffuseLight(color(1.0, 1.0, 0.5))), XraySpectrum)
+    result = translate(point(0, 0, magnetPos + 14.2 * 1000.0), toHittable(Disk(distance: 0.0, radius: 3.0), sunMaterial))
     ## X-ray finger as mentioned in CAST Nature paper ~12 m distance
-    #result = translate(point(0, 0, magnetPos + 12.0 * 1000.0), Disk(distance: 0.0, radius: 3.0, mat: sunMaterial))
+    #result = translate(point(0, 0, magnetPos + 12.0 * 1000.0), toHittable(Disk(distance: 0.0, radius: 3.0), sunMaterial))
   else: doAssert false, "Invalid branch, not an X-ray finger."
 
 proc source(tel: Telescope, magnet: Magnet, magnetPos: float, sourceKind: SourceKind,
-            solarModelFile: string): Hittable =
+            solarModelFile: string): Hittable[XraySpectrum] =
   case sourceKind
   of skSun: result = sun(solarModelFile)
   of skXrayFinger, skParallelXrayFinger: result = xrayFinger(tel, magnet, magnetPos, sourceKind)
 
 proc target(tel: Telescope, magnet: Magnet,
-            visibleTarget: bool): Hittable =
+            visibleTarget: bool): Hittable[XraySpectrum] =
   ## Construct a target for the light source. We want to sample towards the end of the magnet
   ## (the side towards the telescope)
   let z = tel.length() ## Position of telescope end on magnet side
   let pink = color(1.0, 0.05, 0.9)
-  result = toHittable(Disk(distance: 0.0, radius: magnet.radius, mat: toMaterial(initLightTarget(pink, visibleTarget))))
+  result = toHittable(Disk(distance: 0.0, radius: magnet.radius),
+                      toSpectrum(toMaterial(initLightTarget(pink, visibleTarget)), XraySpectrum))
     .translate(vec3(0.0, 0.0, z + magnet.length))
 
 proc lightSource(tel: Telescope, magnet: Magnet,
@@ -883,37 +890,37 @@ proc lightSource(tel: Telescope, magnet: Magnet,
                  sourceKind: SourceKind,
                  visibleTarget: bool,
                  solarModelFile: string
-                ): HittablesList =
+                ): GenericHittablesList =
   ## Constructs a light source as well as the optional target if needed.
-  result = initHittables()
+  result = initGenericHittables()
   result.add source(tel, magnet, magnetPos, sourceKind, solarModelFile)
   if sourceKind != skParallelXrayFinger:
     result.add target(tel, magnet, visibleTarget)
 
-proc magnetBore(magnet: Magnet, magnetPos: float): Hittable =
+proc magnetBore(magnet: Magnet, magnetPos: float): Hittable[RGBSpectrum] =
   let cylMetal = initMaterial(initMetal(color(0.2, 0.2, 0.6), 0.8))
   # The bore is a full cylinder made of metal, slight blue tint
-  result = Cylinder(radius: magnet.radius, zMin: 0.0, zMax: magnet.length, phiMax: 360.0.degToRad, mat: cylMetal)
+  result = toHittable(Cylinder(radius: magnet.radius, zMin: 0.0, zMax: magnet.length, phiMax: 360.0.degToRad), cylMetal)
     .translate(vec3(0.0, 0.0, magnetPos))
 
-proc windowStrongback(windowRotation, windowZOffset: float): HittablesList =
+proc windowStrongback(windowRotation, windowZOffset: float): GenericHittablesList =
   ## Implements the window strongback of the Si₃N₄ window used at CAST for the Septemboard detector.
   const
     distance = 2.3 #mm Distance between strips, edge to edge!
     width = 0.5 # mm Width of each strip
     thick = 0.2 # 200 μm thick
     long = 20.0 ## Window has 2cm diameter. In reality circular, but doesn't matter.
-  result = initHittables()
+  result = initGenericHittables()
   let strMat = initLambertian(color(0.2, 0.2, 0.2))
   for i in 0 ..< 4: ## 4 strips
     let posY = i.float * (distance + width) - 1.5 * (distance + width)
-    result.add initBox(point(-long/2, -width/2, -thick/2),
-                       point( long/2,  width/2,  thick/2),
-                       toMaterial strMat) # we sink ot so that the box becomes the memory owner of the buffer
+    result.add toHittable(initBox(point(-long/2, -width/2, -thick/2),
+                                  point( long/2,  width/2,  thick/2)),
+                          toMaterial strMat) # we sink ot so that the box becomes the memory owner of the buffer
       .translate(vec3(0.0, posY, windowZOffset)) ## z offset above chip. XXX: what to choose? we don't simulate gas diffusion, so 0.3cm?
   result = result.rotateZ(windowRotation)
 
-proc llnlFocalPointRay(tel: Telescope, magnet: Magnet, fullTelescope: bool): Point =
+proc llnlFocalPointRay(tel: Telescope, magnet: Magnet, fullTelescope: bool): Ray =
   ## Returns the ray of the given Telescope (actually assuming the LLNL for the time being)
   ## that goes from the telescope center to the focal point. Evaluating it at any point
   ## other than `1` via `at` yields a point along the "focal line" - a point centered
@@ -963,11 +970,11 @@ proc llnlFocalPoint(tel: Telescope, magnet: Magnet, rayAt: float, fullTelescope:
   ## `rayAt` is the position `t` along the ray from the center of the telescope to the focal point
   ## at which we evaluate it for the returned point. This allows to move the point along the
   ## ray such that the point remains in the center of the (possibly unfocused) image.
-  let ray = llnlFocalPointRay(tel, fullTelescope)
+  let ray = llnlFocalPointRay(tel, magnet, fullTelescope)
   # evaluate it at `rayAt`.
-  echo "Old target: ", target
+  echo "Old target: ", ray.at(1.0)
   result = ray.at(rayAt)
-  echo "New target: ", target
+  echo "New target: ", result
 
 proc imageSensor(tel: Telescope, magnet: Magnet,
                  fullTelescope: bool,
@@ -980,30 +987,31 @@ proc imageSensor(tel: Telescope, magnet: Magnet,
                  telescopeRotation = 0.0, # Need to inverse rotate the sensor to align it *before* translating
                  windowRotation = 30.0,
                  windowZOffset = 3.0,
-                 ignoreWindow = false
-                ): HittablesList =
+                 ignoreWindow = false,
+                 sensorKind = sCount
+                ): GenericHittablesList =
   ## This is the correct offset for the focal spot position! It's the center of the cones for the telescope.
   ## XXX: Sanity check:
   ## -> Check all mirrors we install have the exact same position as an offset!!!
-  let imSensor = toMaterial(initImageSensor(400, 400))
+  let imSensor = toMaterial(initImageSensor(400, 400, kind = sensorKind))
   #let screen = initBox(point(-200, -200, -0.1), point(200, 200, 0.1), imSensor)
   #let screen = initBox(point(-10, -10, -0.1), point(10, 10, 0.1), imSensor)
-  result.add initBox(point(-sensorW/2, -sensorH/2, -sensorThickness/2),
-                     point( sensorW/2,  sensorH/2,  sensorThickness/2),
-                     imSensor) # we sink ot so that the box becomes the memory owner of the buffer
+  result.add toHittable(initBox(point(-sensorW/2, -sensorH/2, -sensorThickness/2),
+                                point( sensorW/2,  sensorH/2,  sensorThickness/2)),
+                        imSensor) # we sink ot so that the box becomes the memory owner of the buffer
                                # otherwise `imSensor` goes out of scope and frees buffer!
   if not ignoreWindow:
     result.add windowStrongback(windowRotation, windowZOffset)
-  let target = llnlFocalPoint(tel, rayAt, fullTelescope)
+  let target = llnlFocalPoint(tel, magnet, rayAt, fullTelescope)
   result = result
     .rotateZ(telescopeRotation)
     .translate(target)
 
-proc gridLines(tel: Telescope, magnet: Magnet): HittablesList =
+proc gridLines(tel: Telescope, magnet: Magnet): GenericHittablesList =
   ## Some helper "grid" lines indicating zero x,y along z as well as center of each mirror
-  result = initHittables()
+  result = initGenericHittables()
   let cylMetal = initMaterial(initMetal(color(0.2, 0.2, 0.6), 0.8))
-  let zLine = Cylinder(radius: 0.05, zMin: -100.0, zMax: magnet.length, phiMax: 360.0.degToRad, mat: cylMetal)
+  let zLine = toHittable(Cylinder(radius: 0.05, zMin: -100.0, zMax: magnet.length, phiMax: 360.0.degToRad), cylMetal)
     .translate(vec3(0.0, -magnet.radius, 0.0)) # 5.0 for xSep + a bit
     #.translate(vec3(0.0, 0.0, 0.0)) # 5.0 for xSep + a bit
   result.add zLine
@@ -1011,14 +1019,14 @@ proc gridLines(tel: Telescope, magnet: Magnet): HittablesList =
   ## XXX: this is slightly wrong due to xSep!
   let lMirror = tel.lMirror
   let z0 = tel.lMirror + tel.xSep + tel.lMirror / 2
-  let xLine = Cylinder(radius: 0.5, zMin: -100.0, zMax: 100, phiMax: 360.0.degToRad, mat: cylMetal)
+  let xLine = toHittable(Cylinder(radius: 0.5, zMin: -100.0, zMax: 100, phiMax: 360.0.degToRad), cylMetal)
     .translate(vec3(0.0, -magnet.radius, 0.0))
     .rotateY(90.0)
     .translate(vec3(0.0, 0.0, z0))
   result.add xLine
 
   let z1 = lMirror / 2
-  let xLine2 = Cylinder(radius: 0.5, zMin: -100.0, zMax: 100, phiMax: 360.0.degToRad, mat: cylMetal)
+  let xLine2 = toHittable(Cylinder(radius: 0.5, zMin: -100.0, zMax: 100, phiMax: 360.0.degToRad), cylMetal)
     .translate(vec3(0.0, -magnet.radius, 0.0))
     .rotateY(90.0)
     .translate(vec3(0.0, 0.0, z1))
@@ -1033,9 +1041,9 @@ proc calcYlYsep(angle, xSep, lMirror: float): (float, float, float) =
   let yL2  = sin(3 * α) * lMirror
   result = (ySep, yL1, yL2)
 
-proc graphiteSpacer(tel: Telescope, magnet: Magnet, fullTelescope: bool): HittablesList =
+proc graphiteSpacer(tel: Telescope, magnet: Magnet, fullTelescope: bool): GenericHittablesList =
   ## The graphite spacer in the middle
-  result = initHittables()
+  result = initGenericHittables()
   let
     lMirror = tel.lMirror
     xSep = tel.xSep
@@ -1044,7 +1052,7 @@ proc graphiteSpacer(tel: Telescope, magnet: Magnet, fullTelescope: bool): Hittab
     α0 = tel.allAngles[0]
     (ySep, yL1, yL2) = calcYlYsep(α0, xSep, lMirror)
     meanAngle = tel.allAngles.mean
-  let gSpacer = initBox(point(0, 0, 0), point(2, 2 * magnet.radius + excessSize, lMirror), graphite)
+  let gSpacer = toHittable(initBox(point(0, 0, 0), point(2, 2 * magnet.radius + excessSize, lMirror)), graphite)
     .translate(vec3(-1.0, -magnet.radius - excessSize / 2, -lMirror / 2))
   let gSpacer1 = gSpacer
     .rotateX(meanAngle)
@@ -1056,16 +1064,16 @@ proc graphiteSpacer(tel: Telescope, magnet: Magnet, fullTelescope: bool): Hittab
   result.add gSpacer2
   if fullTelescope: ## Also add the center blocking disk
     #let imSensorDisk = toMaterial(initImageSensor(400, 400))
-    #let centerDisk = Disk(distance: 0.0, radius: 500.0, mat: graphite) #imSensorDisk)
-    #let centerDisk = XyRect(x0: -boreRadius, x1: boreRadius, y0: -boreRadius, y1: boreRadius, mat: imSensorDisk)  #Disk(distance: 0.0, radius: 500.0, mat: imSensorDisk)
+    #let centerDisk = toHittable(Disk(distance: 0.0, radius: 500.0), graphite) #imSensorDisk)
+    #let centerDisk = XyRect(x0: -boreRadius, x1: boreRadius, y0: -boreRadius, y1: boreRadius), imSensorDisk)  #Disk(distance: 0.0, radius: 500.0), imSensorDisk)
     #let centerDisk = initBox(point(-magnet.radius, -magnet.radius, -0.1), point(magnet.radius, magnet.radius, 0.1), imSensorDisk)
     ## A disk that blocks the inner part where no mirrors cover the bore.
-    let centerDisk = Disk(distance: 0.0, radius: tel.allR1[0] - sin(tel.allAngles[0].degToRad) * tel.lMirror,
-                          mat: graphite)
+    let centerDisk = toHittable(Disk(distance: 0.0, radius: tel.allR1[0] - sin(tel.allAngles[0].degToRad) * tel.lMirror),
+                                graphite)
       .translate(vec3(0.0, 0.0, lMirror * 2 + xSep))
     result.add centerDisk
 
-proc sanityTelescopeOutput(r1, r5, pos, pos2, angle, lMirror, xSep, yL1, yL2, ySep, boreRadius: float) =
+proc sanityTelescopeOutput(i: int, r1, r5, pos, pos2, angle, lMirror, xSep, yL1, yL2, ySep, boreRadius: float) =
   ## XXX: clean this up and make more useful!
   echo "r1 = ", r1, " r5 = ", r5, " r5 - r1 = ", r5 - r1, " i = ", i, " pos = ", pos, " pos2 = ", pos2
   block Sanity:
@@ -1074,7 +1082,25 @@ proc sanityTelescopeOutput(r1, r5, pos, pos2, angle, lMirror, xSep, yL1, yL2, yS
     let yOffset = (r1 - (sin(angle.degToRad) * lMirror) / 2.0) + boreRadius - pos
     echo "Offset for layer ", i, " should be: ", yOffset, " \n==============================\n\n"
 
-proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope, usePerfectMirror: bool): HittablesList =
+from std/algorithm import lowerBound
+proc llnlLayerMaterial(layer: int, refl: Reflectivity, usePerfectMirror: bool,
+                       c: Color): Material[XraySpectrum] =
+  #let perfectMirror = initMaterial(initMetal(color(1.0, 0.0, 0.0), 0.0))
+  ## Imperfect value assuming a 'figure error similar to NuSTAR of 1 arcmin'
+  ## -> tan(1 ArcMin) (because fuzz added to unit vector)
+  const ImperfectVal = 0.0002908880082045767
+  #let imperfectMirror = initMaterial(initMetal(color(1.0, 0.0, 0.0), ImperfectVal))
+  #let mat = if usePerfectMirror: perfectMirror else: imperfectMirror
+
+  let idx = refl.layers.lowerBound(layer)
+  let R = refl.interp[idx]
+  #let c = color(1.0, 0.0, 0.0)
+  let fuzz = if usePerfectMirror: 0.0 else: ImperfectVal
+  ## NOTE: we use the 1 - reflectivity as a placeholder for the real transmission. This _should_ be
+  ## correct, but in reality there will be mismatches
+  result = toMaterial initXrayMatter(c, fuzz, R, 1.0 - R)
+
+proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope, usePerfectMirror: bool): GenericHittablesList =
   ## Constructs the actual LLNL telescope
   ##
   ## Pos for the 'first' layers should be correct, under the following two conditions:
@@ -1086,13 +1112,7 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope, usePerfectMirr
   let
     lMirror = tel.lMirror
     xSep = tel.xSep
-  let perfectMirror = initMaterial(initMetal(color(1.0, 0.0, 0.0), 0.0))
-  ## Imperfect value assuming a 'figure error similar to NuSTAR of 1 arcmin'
-  ## -> tan(1 ArcMin) (because fuzz added to unit vector)
-  const ImperfectVal = 0.0002908880082045767
-  let imperfectMirror = initMaterial(initMetal(color(1.0, 0.0, 0.0), ImperfectVal))
-  let mat = if usePerfectMirror: perfectMirror else: imperfectMirror
-
+  let reflectivity = setupReflectivity() ## `fluxCDF.nim`
   let r1_0 = tel.allR1[0]
   for i in 0 ..< tel.allR1.len:
     let
@@ -1105,19 +1125,22 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope, usePerfectMirr
     let pos = (r1 - r1_0) ## Only shift each layer relative to first layer. Other displacement done in `setCone`
     let pos2 = pos - yL1 / 2.0 - yL2 / 2.0 - ySep
     if sanity:
-      sanityTelescopeOutput(r1, r5, pos, pos2, angle, lMirror, xSep, yL1, yL2, ySep, magnet.radius)
-    proc setCone(r, angle, y, z: float, mat: Material): Hittable =
+      sanityTelescopeOutput(i, r1, r5, pos, pos2, angle, lMirror, xSep, yL1, yL2, ySep, magnet.radius)
+    proc setCone[S: SomeSpectrum](r, angle, y, z: float, fullTelescope: bool, tel: Telescope, magnet: Magnet, mat: Material[S]): Hittable[S] =
       # `xOffset` is the displacement from front to center of mirror (x because cone with `phiMax`
       # starts from x = 0)
       let xOffset = (sin(angle.degToRad) * lMirror) / 2.0
       let height = calcHeight(r, angle) # total height of the cone that yields required radius and angle
-      proc cone(r, h: float): Cone =
-        result = Cone(radius: r, height: h, zMax: lMirror,
-                      phiMax: tel.mirrorSize.degToRad, mat: mat)
-      proc cyl(r, h: float): Cylinder =
-        result = Cylinder(radius: r, zMin: 0.0, zMax: lMirror,
-                          phiMax: tel.mirrorSize.degToRad, mat: mat)
-      let c = cone(r, height)
+      proc cone[S: SomeSpectrum](r, h: float, tel: Telescope, mat: Material[S]): Hittable[S] =
+        result = toHittable(Cone(radius: r, height: h, zMax: lMirror,
+                                 phiMax: tel.mirrorSize.degToRad),
+                            mat)
+      proc cyl[S: SomeSpectrum](r, h: float, tel: Telescope, mat: Material[S]): Hittable[S] =
+        result = toHittable(Cylinder(radius: r, zMin: 0.0, zMax: lMirror,
+                                     phiMax: tel.mirrorSize.degToRad),
+                            mat)
+
+      let c = cone(r, height, tel, mat)
       #let c = cyl(r, height) ## To construct a fake telescope
       # for the regular telescope first move to -r + xOffset to rotate around center of layer. Full no movement
       let xOrigin = if fullTelescope: 0.0 else: -r + xOffset # aligns *center* of mirror
@@ -1129,14 +1152,17 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope, usePerfectMirr
         .rotateZ(-90.0)
         .translate(vec3(0.0, yOffset, z + lMirror / 2.0)) # move to its final position
       result = h
-    let con  = setCone(r1, angle,     pos,  lMirror + xSep, mat)
+
+    let mat1 = llnlLayerMaterial(i, reflectivity, usePerfectMirror, color(1.0, 0.0, 0.0))
+    let mat2 = llnlLayerMaterial(i, reflectivity, usePerfectMirror, color(0.0, 1.0, 0.0))
+    let con  = setCone(r1, angle,     pos,  lMirror + xSep, fullTelescope, tel, magnet, mat1)
     ## NOTE: using `r1` as well reproduces the X-ray finger results from the _old_ raytracer!
-    let con2 = setCone(r4, 3 * angle, pos2, 0.0,            mat)
+    let con2 = setCone(r4, 3 * angle, pos2, 0.0,            fullTelescope, tel, magnet, mat2)
     result.add con
     result.add con2
 
-proc initSetup(fullTelescope: static bool): (Telescope, Magnet) =
-  when not fullTelescope:
+proc initSetup(fullTelescope: bool): (Telescope, Magnet) =
+  if not fullTelescope:
     const
       boreRadius = 43.0 / 2 # mm
       length = 9.26 # m
@@ -1163,8 +1189,9 @@ proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, 
                                           # Separate to include real rotation aside from pointing the entire setup.
                windowRotation = 30.0,
                windowZOffset = 3.0,
-               ignoreWindow = false
-              ): HittablesList =
+               ignoreWindow = false,
+               sensorKind = sCount
+              ): GenericHittablesList =
   ## Mirrors centered at lMirror/2.
   ## Entire telescope
   ##   lMirror  xsep  lMirror
@@ -1176,25 +1203,27 @@ proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, 
   ## `xSep = 4 mm` exactly, `lMirror = 225 mm` and the correct cones are computed based on the
   ## given angles and the R1, R5 values. R4 is the relevant radius of the cone for the
   ## second set of mirrors. Therefore R1 and R4 are actually relevant.
-  result = initHittables(0)
+  result = initGenericHittables()
   ## Constants fixed to *this* specific setup
   let (llnl, magnet) = initSetup(fullTelescope = false)
+  const telescopeMagnetZOffset = 1.0 # 1 mm
   let magnetPos = llnl.length + telescopeMagnetZOffset
 
-  var objs = initHittables(0)
+  var objs = initGenericHittables()
 
   objs.add earth()
   objs.add lightSource(llnl, magnet, magnetPos, sourceKind, visibleTarget, solarModelFile)
   objs.add magnetBore(magnet, magnetPos)
   if gridLines:
     objs.add gridLines(llnl, magnet)
-  var telescopeImSensor = initHittables()
+  var telescopeImSensor = initGenericHittables()
   # Add the image sensor and potentially window strongback
   telescopeImSensor.add imageSensor(llnl, magnet, fullTelescope = false,
                                     rayAt = rayAt, telescopeRotation = telescopeRotation,
-                                    sensorW = 10.0, sensorH = 10.0,
+                                    sensorW = 14.0, sensorH = 14.0,
                                     windowRotation = windowRotation,
-                                    windowZOffset = windowZOffset, ignoreWindow = ignoreWindow)
+                                    windowZOffset = windowZOffset, ignoreWindow = ignoreWindow,
+                                    sensorKind = sensorKind)
   telescopeImSensor.add graphiteSpacer(llnl, magnet, fullTelescope = false)
   telescopeImSensor.add llnlTelescope(llnl, magnet, fullTelescope = false, usePerfectMirror = usePerfectMirror)
   objs.add telescopeImSensor
@@ -1204,7 +1233,7 @@ proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, 
   result.add objs
 
 proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
-                    solarModelFile: string): HittablesList =
+                    solarModelFile: string): GenericHittablesList =
   ## Mirrors centered at lMirror/2.
   ## Entire telescope
   ##   lMirror  xsep  lMirror
@@ -1216,19 +1245,20 @@ proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: b
   ## `xSep = 4 mm` exactly, `lMirror = 225 mm` and the correct cones are computed based on the
   ## given angles and the R1, R5 values. R4 is the relevant radius of the cone for the
   ## second set of mirrors. Therefore R1 and R4 are actually relevant.
-  result = initHittables(0)
+  result = initGenericHittables()
   ## Constants fixed to *this* specific setup
   let (llnl, magnet) = initSetup(fullTelescope = false)
+  const telescopeMagnetZOffset = 1.0 # 1 mm
   let magnetPos = llnl.length + telescopeMagnetZOffset
 
-  var objs = initHittables(0)
+  var objs = initGenericHittables()
 
   objs.add earth()
   if gridLines:
     objs.add gridLines(llnl, magnet)
   objs.add imageSensor(llnl, magnet, fullTelescope = true) ## Don't want y displacement, the two bores are rotated by 90°
                                                            ## so focal spot is on y = 0
-  var telMag = initHittables()
+  var telMag = initGenericHittables()
   case sourceKind
   of skSun: objs.add sun(solarModelFile) ## Only a single sun in center x/y! Hence add to `objs` so not duplicated
   of skXrayFinger, skParallelXrayFinger:
@@ -1250,7 +1280,7 @@ proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: b
 
 proc sceneLLNLFullTelescope(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
                             solarModelFile: string,
-                            rayAt = 1.0): HittablesList =
+                            rayAt = 1.0): GenericHittablesList =
   ## Mirrors centered at lMirror/2.
   ## Entire telescope
   ##   lMirror  xsep  lMirror
@@ -1262,12 +1292,13 @@ proc sceneLLNLFullTelescope(rnd: var Rand, visibleTarget, gridLines, usePerfectM
   ## `xSep = 4 mm` exactly, `lMirror = 225 mm` and the correct cones are computed based on the
   ## given angles and the R1, R5 values. R4 is the relevant radius of the cone for the
   ## second set of mirrors. Therefore R1 and R4 are actually relevant.
-  result = initHittables(0)
+  result = initGenericHittables()
   ## Constants fixed to *this* specific setup
   let (llnl, magnet) = initSetup(fullTelescope = true)
+  const telescopeMagnetZOffset = 1.0 # 1 mm
   let magnetPos = llnl.length + telescopeMagnetZOffset
 
-  var objs = initHittables(0)
+  var objs = initGenericHittables()
   objs.add earth()
   objs.add lightSource(llnl, magnet, magnetPos, sourceKind, visibleTarget, solarModelFile)
   objs.add magnetBore(magnet, magnetPos)
@@ -1275,7 +1306,7 @@ proc sceneLLNLFullTelescope(rnd: var Rand, visibleTarget, gridLines, usePerfectM
     objs.add gridLines(llnl, magnet)
   objs.add imageSensor(llnl, magnet, fullTelescope = true, rayAt = rayAt)
 
-  var telescope = initHittables()
+  var telescope = initGenericHittables()
   telescope.add graphiteSpacer(llnl, magnet, fullTelescope = true)
   telescope.add llnlTelescope(llnl, magnet, fullTelescope = true, usePerfectMirror = usePerfectMirror)
   objs.add telescope
@@ -1308,6 +1339,7 @@ proc main(width = 600,
           windowRotation = 30.0,
           windowZOffset = 3.0,
           ignoreWindow = false,
+          sensorKind = sCount
          ) =
   # Image
   THREADS = nJobs
@@ -1320,7 +1352,7 @@ proc main(width = 600,
   ## Looking at mirrors!
   var lookFrom: Point = point(1,1,1)
   var lookAt: Point = point(0,0,0)
-  var world: HittablesList
+  var world: GenericHittablesList
   if llnl:
     if axisAligned:
       lookFrom = point(0.0, 0.0, -100.0) #point(-0.5, 3, -0.5)#point(3,3,2)
@@ -1347,7 +1379,8 @@ proc main(width = 600,
     else:
       echo "Visible target? ", visibleTarget
       world = rnd.sceneLLNL(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile, rayAt,
-                            setupRotation, telescopeRotation, windowRotation, windowZOffset, ignoreWindow)
+                            setupRotation, telescopeRotation, windowRotation, windowZOffset, ignoreWindow,
+                            sensorKind)
   elif spheres:
     world = rnd.randomScene(useBvh = false) ## Currently BVH broken
     lookFrom = point(0,1.5,-2.0)

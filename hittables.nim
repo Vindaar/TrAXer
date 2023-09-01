@@ -1,338 +1,218 @@
 import basetypes, math, aabb, algorithm, random
 
-import sensorBuf
+import numericalnim/interpolate
+
+import materials, shapes
+export materials, shapes
 
 type
   Transform* = Mat4d
 
   HittableKind* = enum
     htSphere, htCylinder, htCone, htParaboloid, htHyperboloid, htBvhNode, htXyRect, htXzRect, htYzRect, htBox, htDisk
-  Hittable* {.acyclic.} = ref object
+  Hittable*[S: SomeSpectrum] {.acyclic.} = ref object
     trans*: Transform = mat4d()
     invTrans*: Transform = mat4d()
+    mat*: Material[S]
     case kind*: HittableKind
     of htSphere: hSphere*: Sphere
     of htCylinder: hCylinder*: Cylinder
     of htCone: hCone*: Cone
     of htParaboloid: hParaboloid*: Paraboloid
     of htHyperboloid: hHyperboloid*: Hyperboloid
-    of htBvhNode: hBvhNode*: BvhNode
+    of htBvhNode: hBvhNode*: BvhNode[S]
     of htXyRect: hXyRect*: XyRect
     of htXzRect: hXzRect*: XzRect
     of htYzRect: hYzRect*: YzRect
-    of htBox: hBox*: Box
+    of htBox: hBox*: Box[S]
     of htDisk: hDisk: Disk
 
-  HittablesList* = object
+  HittablesList*[S: SomeSpectrum] = object
     len*: int # len of data seq
     #size*: int # internal data size
-    data*: seq[Hittable] #ptr UncheckedArray[Hittable]
+    data*: seq[Hittable[S]] #ptr UncheckedArray[Hittable]
 
-  BvhNode* = object
-    left*: Hittable
-    right*: Hittable
+  BvhNode*[S: SomeSpectrum] = object
+    left*: Hittable[S]
+    right*: Hittable[S]
     box*: AABB
 
-  HitRecord* = object
-    p*: Point
-    normal*: Vec3d
-    t*: float
-    frontFace*: bool
-    mat*: Material
-    u*, v*: float
-
-  Sphere* = object
-    radius*: float
-    mat*: Material
-
-  XyRect* = object
-    mat*: Material
-    x0*, x1*, y0*, y1*, k*: float
-
-  XzRect* = object
-    mat*: Material
-    x0*, x1*, z0*, z1*, k*: float
-
-  YzRect* = object
-    mat*: Material
-    y0*, y1*, z0*, z1*, k*: float
-
-  Cylinder* = object
-    radius*: float
-    zMin*: float
-    zMax*: float
-    phiMax*: float
-    mat*: Material
-
-  Cone* = object ## Describes a positive cone, starting at z = 0 with `radius` towards +z. r = 0 at `height`
-    radius*: float ## Radius at z = 0
-    phiMax*: float
-    height*: float ## Height of the cone, if complete. This is where its radius is 0.
-    zMax*: float ## Cuts off the cone at zMax.
-    mat*: Material
-
-  Paraboloid* = object
-    radius*: float
-    zMin*: float
-    zMax*: float
-    phiMax*: float
-    mat*: Material
-
-  Hyperboloid* = object
-    p1*: Point
-    p2*: Point
-    #radius1*: float
-    #radius2*: float
-    rMax*: float
-    zMin*: float
-    zMax*: float
-    ah*: float
-    ch*: float
-    phiMax*: float
-    mat*: Material
-
-  Box* = object
-    mat*: Material
+  Box*[S: SomeSpectrum] = object
     boxMin*: Point
     boxMax*: Point
-    sides*: HittablesList
+    sides*: HittablesList[S]
 
-  Disk* = object
-    distance*: float # distance along z axis
-    radius*: float
-    innerRadius*: float
-    phiMax*: float = 360.0.degToRad
-    mat*: Material
+  #AnyHittable* = Sphere | Cylinder | Cone | Paraboloid | Hyperboloid | BvhNode | XyRect | XzRect | YzRect | Box | Disk
 
-  AnyHittable* = Sphere | Cylinder | Cone | Paraboloid | Hyperboloid | BvhNode | XyRect | XzRect | YzRect | Box | Disk
+  GenericHittablesList* = object
+    rgbs: HittablesList[RGBSpectrum]
+    xray: HittablesList[XraySpectrum]
 
-  MaterialKind* = enum
-    mkLambertian, mkMetal, mkDielectric, mkDiffuseLight, mkSolarEmission, mkLaser, mkImageSensor, mkLightTarget
-  Material* = object
-    case kind*: MaterialKind
-    of mkLambertian: mLambertian*: Lambertian
-    of mkMetal: mMetal: Metal
-    of mkDielectric: mDielectric: Dielectric
-    of mkDiffuseLight: mDiffuseLight: DiffuseLight
-    of mkSolarEmission: mSolarEmission: SolarEmission
-    of mkLaser: mLaser: Laser
-    of mkImageSensor: mImageSensor*: ImageSensor
-    of mkLightTarget: mLightTarget*: LightTarget
+proc initBvhNode*[S: SomeSpectrum](rnd: var Rand, list: HittablesList[S], start, stop: int): BvhNode[S]
+proc initBvhNode*[S: SomeSpectrum](rnd: var Rand, list: HittablesList[S]): BvhNode[S] =
+  result = initBvhNode[S](rnd, list, 0, list.len)
 
-  TextureKind* = enum
-    tkSolid, tkChecker#, tkAbsorbentTexture
-
-  Texture* {.acyclic.} = ref object
-    case kind*: TextureKind
-    of tkSolid: tSolid: SolidTexture
-    of tkChecker: tChecker: CheckerTexture
-
-  SolidTexture* {.acyclic.} = ref object
-    color*: Color
-
-  CheckerTexture* {.acyclic.} = ref object
-    invScale*: float
-    even*: Texture
-    odd*: Texture
-
-  DiffuseLight* = object
-    emit*: Texture
-
-  SolarEmission* = object
-    emit*: Texture ## The color used for the regular light source
-    fluxRadiusCDF*: seq[float] ## The relative emission for each radius as a CDF
-
-  ImageSensor* = object
-    sensor*: Sensor2D
-
-  ## A `LightTarget` is a material assigned to any `Hittable`, which will be used to sample rays from
-  ## `DiffuseLight` sources. Any `DiffuseLight` will sample rays towards the surface of the `Hittable`
-  ## of `LightTarget`.
-  LightTarget* = object
-    visible*: bool # Whether it is visible for the Camera based rays
-    albedo*: Texture # The texture is only relevant for the Camera based rays to visualize it.
-
-  ## If a `Laser` is applied to an object, it means the entire surface emits alnog the normal. I.e.
-  ## this produces parallel light if emitting from a disk (for the Sun!)
-  Laser* = object
-    emit*: Texture
-
-  Lambertian* = object
-    albedo*: Texture
-
-  Metal* = object
-    albedo*: Color
-    fuzz*: float
-
-  Dielectric* = object
-    ir*: float # refractive index (could use `eta`)
-
-  AnyMaterial* = Lambertian | Metal | Dielectric | DiffuseLight | Laser | SolarEmission | Dielectric | ImageSensor | LightTarget
-
-proc value*(s: Texture, u, v: float, p: Point): Color {.gcsafe.}
-
-proc solidColor*(c: Color): SolidTexture = SolidTexture(color: c)
-proc solidColor*(r, g, b: float): SolidTexture = SolidTexture(color: color(r, g, b))
-proc value*(s: SolidTexture, u, v: float, p: Point): Color = s.color # Is solid everywhere after all
-
-proc toTexture*(x: Color): Texture = Texture(kind: tkSolid, tSolid: solidColor(x))
-proc toTexture*(x: SolidTexture): Texture = Texture(kind: tkSolid, tSolid: x)
-proc toTexture*(x: CheckerTexture): Texture = Texture(kind: tkChecker, tChecker: x)
-
-proc checkerTexture*(scale: float, even, odd: Texture): CheckerTexture = CheckerTexture(invScale: 1.0 / scale, even: even, odd: odd)
-proc checkerTexture*(scale: float, c1, c2: Color): CheckerTexture =
-  result = CheckerTexture(invScale: 1.0 / scale, even: toTexture(c1), odd:  toTexture(c2))
-
-proc value*(s: CheckerTexture, u, v: float, p: Point): Color =
-  ## Return the color of the checker board at the u, v coordinates and `p`
-  let xInt = floor(s.invScale * p.x).int
-  let yInt = floor(s.invScale * p.y).int
-  let zInt = floor(s.invScale * p.z).int
-  let isEven = (xInt + yInt + zInt) mod 2 == 0
-  result = if isEven: s.even.value(u, v, p) else: s.odd.value(u, v, p)
-
-proc value*(s: Texture, u, v: float, p: Point): Color {.gcsafe.} =
-  case s.kind
-  of tkSolid:   result = s.tSolid.value(u, v, p)
-  of tkChecker: result = s.tChecker.value(u, v, p)
-
-proc initHittables*(size: int = 8): HittablesList =
+proc initHittables*[S: SomeSpectrum](size: int = 8): HittablesList[S] =
   ## allocates memory for `size`, but remains empty
   let size = if size < 8: 8 else: size
   result.len = 0
-  result.data = newSeqOfCap[Hittable](size)
+  result.data = newSeqOfCap[Hittable[S]](size)
 
-proc `[]`*(h: HittablesList, idx: int): Hittable =
+proc `[]`*[S: SomeSpectrum](h: HittablesList[S], idx: int): Hittable[S] =
   assert idx < h.len
   result = h.data[idx]
 
-proc `[]`*(h: var HittablesList, idx: int): var Hittable =
+proc `[]`*[S: SomeSpectrum](h: var HittablesList[S], idx: int): var Hittable[S] =
   assert idx < h.len
   result = h.data[idx]
 
-proc `[]=`*(h: var HittablesList, idx: int, el: Hittable) =
+proc `[]=`*[S: SomeSpectrum](h: var HittablesList[S], idx: int, el: Hittable[S]) =
   assert idx < h.len
   h.data[idx] = el
 
-iterator items*(h: HittablesList): Hittable =
+iterator items*[S: SomeSpectrum](h: HittablesList[S]): Hittable[S] =
   for idx in 0 ..< h.len:
     yield h[idx]
 
-proc initBvhNode*(rnd: var Rand, list: HittablesList, start, stop: int): BvhNode
-proc initBvhNode*(rnd: var Rand, list: HittablesList): BvhNode =
-  result = initBvhNode(rnd, list, 0, list.len)
-
-proc `[]`*(h: HittablesList, slice: Slice[int]): HittablesList =
+proc `[]`*[S: SomeSpectrum](h: HittablesList[S], slice: Slice[int]): HittablesList[S] =
   let sliceLen = slice.b - slice.a
-  result = initHittables(sliceLen)
+  result = initHittables[S](sliceLen)
   for idx in 0 ..< sliceLen:
     result.data[idx] = h.data[slice.a + idx]
   result.len = sliceLen
 
-proc sort*(h: var HittablesList, start, stop: int, cmp: proc(x, y: Hittable): bool,
+proc sort*[S: SomeSpectrum](h: var HittablesList[S], start, stop: int, cmpH: proc(x, y: Hittable[S]): int,
            order = SortOrder.Ascending) =
-  proc locCmp(a, b: Hittable): int =
-    let res = cmp(a, b)
-    result = if res: 1 else: -1
-  h.data.toOpenArray(start, stop-1).sort(locCmp, order = order)
+  h.data.toOpenArray(start, stop-1).sort(cmpH, order = order)
 
-proc getMaterial*(h: Hittable): Material
-proc add*(h: var HittablesList, el: Hittable) =
+proc add*[S: SomeSpectrum](h: var HittablesList[S], el: Hittable[S]) =
   ## adds a new element to h. If space is there
   h.data.add el
   inc h.len
 
-proc clone*(h: Hittable): Hittable =
-  result = Hittable(trans: h.trans,
-                    invTrans: h.invTrans,
-                    kind: h.kind)
+# forward declaration
+proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](h: Hittable[S], _: typedesc[T]): Hittable[T]
+
+proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](x: BvhNode[S], _: typedesc[T]): BvhNode[T] =
+  result = BvhNode[T](left: toSpectrum(x.left, T), right: toSpectrum(x.right, T), box: x.box)
+
+proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](x: Box[S], _: typedesc[T]): Box[T] =
+  result = Box[T](boxMin: x.boxMin, boxMax: x.boxMax,
+                  sides: toSpectrum(x.sides, T))
+
+proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](h: Hittable[S], _: typedesc[T]): Hittable[T] =
+  result = Hittable[T](mat: toSpectrum(h.mat, T),
+                       trans: h.trans,
+                       invTrans: h.invTrans,
+                       kind: h.kind)
   case h.kind
   of htSphere:      result.hSphere = h.hSphere
   of htCylinder:    result.hCylinder = h.hCylinder
   of htCone:        result.hCone = h.hCone
   of htParaboloid:  result.hParaboloid = h.hParaboloid
   of htHyperboloid: result.hHyperboloid = h.hHyperboloid
-  of htBvhNode:     result.hBvhNode = h.hBvhNode
+  of htBvhNode:     result.hBvhNode = toSpectrum(h.hBvhNode, T)
   of htXyRect:      result.hXyRect = h.hXyRect
   of htXzRect:      result.hXzRect = h.hXzRect
   of htYzRect:      result.hYzRect = h.hYzRect
-  of htBox:         result.hBox = h.hBox
+  of htBox:         result.hBox = toSpectrum(h.hBox, T)
   of htDisk:        result.hDisk = h.hDisk
 
+proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](h: HittablesList[S], _: typedesc[T]): HittablesList[T] =
+  result = initHittables[T](h.len)
+  for x in h:
+    result.add toSpectrum(x, T)
 
-proc clone*(h: HittablesList): HittablesList =
-  result = initHittables(h.len)
+proc clone*[S: SomeSpectrum](h: Hittable[S]): Hittable[S] = toSpectrum(h, S)
+
+proc clone*[S: SomeSpectrum](h: HittablesList[S]): HittablesList[S] =
+  result = initHittables[S](h.len)
   for x in h:
     result.add clone(x)
 
-proc toHittable*(s: Sphere): Hittable      = result = Hittable(kind: htSphere, hSphere: s)
-proc toHittable*(c: Cylinder): Hittable    = result = Hittable(kind: htCylinder, hCylinder: c)
-proc toHittable*(c: Cone): Hittable        = result = Hittable(kind: htCone, hCone: c)
-proc toHittable*(p: Paraboloid): Hittable  = result = Hittable(kind: htParaboloid, hParaboloid: p)
-proc toHittable*(h: Hyperboloid): Hittable = result = Hittable(kind: htHyperboloid, hHyperboloid: h)
-proc toHittable*(d: Disk): Hittable        = result = Hittable(kind: htDisk, hDisk: d)
-proc toHittable*(b: BvhNode): Hittable     = result = Hittable(kind: htBvhNode, hBvhNode: b)
-proc toHittable*(r: XyRect): Hittable      = result = Hittable(kind: htXyRect, hXyRect: r)
-proc toHittable*(r: XzRect): Hittable      = result = Hittable(kind: htXzRect, hXzRect: r)
-proc toHittable*(r: YzRect): Hittable      = result = Hittable(kind: htYzRect, hYzRect: r)
-proc toHittable*(b: Box): Hittable         = result = Hittable(kind: htBox, hBox: b)
+proc toHittable*[S: SomeSpectrum](s: Sphere, mat: Material[S]): Hittable[S]      = result = Hittable[S](kind: htSphere, hSphere: s, mat: mat)
+proc toHittable*[S: SomeSpectrum](c: Cylinder, mat: Material[S]): Hittable[S]    = result = Hittable[S](kind: htCylinder, hCylinder: c, mat: mat)
+proc toHittable*[S: SomeSpectrum](c: Cone, mat: Material[S]): Hittable[S]        = result = Hittable[S](kind: htCone, hCone: c, mat: mat)
+proc toHittable*[S: SomeSpectrum](p: Paraboloid, mat: Material[S]): Hittable[S]  = result = Hittable[S](kind: htParaboloid, hParaboloid: p, mat: mat)
+proc toHittable*[S: SomeSpectrum](h: Hyperboloid, mat: Material[S]): Hittable[S] = result = Hittable[S](kind: htHyperboloid, hHyperboloid: h, mat: mat)
+proc toHittable*[S: SomeSpectrum](d: Disk, mat: Material[S]): Hittable[S]        = result = Hittable[S](kind: htDisk, hDisk: d, mat: mat)
+proc toHittable*[S: SomeSpectrum](b: BvhNode[S]): Hittable[S]                    = result = Hittable[S](kind: htBvhNode, hBvhNode: b)
+proc toHittable*[S: SomeSpectrum](r: XyRect, mat: Material[S]): Hittable[S]      = result = Hittable[S](kind: htXyRect, hXyRect: r, mat: mat)
+proc toHittable*[S: SomeSpectrum](r: XzRect, mat: Material[S]): Hittable[S]      = result = Hittable[S](kind: htXzRect, hXzRect: r, mat: mat)
+proc toHittable*[S: SomeSpectrum](r: YzRect, mat: Material[S]): Hittable[S]      = result = Hittable[S](kind: htYzRect, hYzRect: r, mat: mat)
+proc toHittable*[S: SomeSpectrum; T: SomeSpectrum](b: Box[S], mat: Material[T]): Hittable[T] =
+  ## If different material spectrum than box, convert the box
+  result = Hittable[T](kind: htBox, hBox: toSpectrum(b, T), mat: mat)
 
-proc add*[T: AnyHittable](h: var HittablesList, ht: T) = h.add toHittable(ht)
-proc add*(h: var HittablesList, lst: HittablesList) =
+#proc add*[T: AnyHittable](h: var HittablesList[S], ht: T) = h.add toHittable(ht)
+proc add*[S: SomeSpectrum](h: var HittablesList[S], lst: HittablesList[S]) =
   for x in lst:
     h.add x
 
-proc delete*(h: var HittablesList, ht: Hittable) =
+proc delete*[S: SomeSpectrum](h: var HittablesList[S], ht: Hittable[S]) =
   ## Deletes `ht` from `h` if it exists
   let idx = h.data.find(ht)
   if idx > 0:
     h.data.delete(idx)
     dec h.len
 
+proc initBox*(p0, p1: Point): Box[RGBSpectrum] =
+  result.boxMin = p0
+  result.boxMax = p1
+
+  ## NOTE: We reuse `RGBSpectrum` but that is only because we don't care about materials
+  ## in the box! The material we care about is of the `Hittable` that *contains* the Box.
+  result.sides = initHittables[RGBSpectrum](0)
+
+  let mat = initMaterial(initLambertian(color(0,0,0))) # dummy
+  result.sides.add toHittable(initXyRect(p0.x, p1.x, p0.y, p1.y, p1.z), mat)
+  result.sides.add toHittable(initXyRect(p0.x, p1.x, p0.y, p1.y, p0.z), mat)
+
+  result.sides.add toHittable(initXzRect(p0.x, p1.x, p0.z, p1.z, p1.y), mat)
+  result.sides.add toHittable(initXzRect(p0.x, p1.x, p0.z, p1.z, p0.y), mat)
+
+  result.sides.add toHittable(initYzRect(p0.y, p1.y, p0.z, p1.z, p1.x), mat)
+  result.sides.add toHittable(initYzRect(p0.y, p1.y, p0.z, p1.z, p0.x), mat)
+
+proc initGenericHittables*(): GenericHittablesList =
+  result = GenericHittablesList(rgbs: initHittables[RGBSpectrum](),
+                                xray: initHittables[XraySpectrum]())
+
+proc len*(h: GenericHittablesList): int = h.rgbs.len + h.xray.len
+
+proc clone*(x: GenericHittablesList): GenericHittablesList =
+  result = GenericHittablesList(rgbs: x.rgbs.clone(),
+                                xray: x.xray.clone())
+
+proc cloneAsRGB*(x: GenericHittablesList): HittablesList[RGBSpectrum] =
+  ## Extract all elements from both lists and returns all elements as `RGBSpectrum`
+  result = initHittables[RGBSpectrum](x.len)
+  for el in x.rgbs:
+    result.add el.clone()
+  for el in x.xray:
+    result.add toSpectrum(el, RGBSpectrum) # already is a clone operation
+
+proc cloneAsXray*(x: GenericHittablesList): HittablesList[XraySpectrum] =
+  ## Extract all elements from both lists and returns all elements as `RGBSpectrum`
+  result = initHittables[XraySpectrum](x.len)
+  for el in x.rgbs:
+    result.add toSpectrum(el, XraySpectrum) # already is a clone operation
+  for el in x.xray:
+    result.add el.clone()
+
+proc add*[S: SomeSpectrum](x: var GenericHittablesList, val: Hittable[S] | HittablesList[S]) =
+  when S is RGBSpectrum:
+    x.rgbs.add val
+  else:
+    x.xray.add val
+
+proc add*(x: var GenericHittablesList, h: GenericHittablesList) =
+  x.add h.rgbs
+  x.add h.xray
+
 proc setFaceNormal*(rec: var HitRecord, r: Ray, outward_normal: Vec3d) =
   rec.frontFace = r.dir.dot(outward_normal) < 0
   rec.normal = if rec.frontFace: outward_normal else: -outward_normal
-
-proc hit*(h: Hittable, r: Ray, tMin, tMax: float, rec: var HitRecord): bool {.gcsafe.}
-proc hit*(n: BvhNode, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
-  if not n.box.hit(r, tMin, tMax):
-    return false
-
-  let hitLeft = n.left.hit(r, tMin, tMax, rec)
-  let hitRight = n.right.hit(r, tMin, if hitLeft: rec.t else: tMax, rec)
-
-  result = hitLeft or hitRight
-
-proc hit*(h: HittablesList, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
-  var tmpRec: HitRecord
-  result = false
-  var closestSoFar = tMax
-
-  for obj in h:
-    if obj.hit(r, tMin, closestSoFar, tmpRec):
-      result = true
-      closestSoFar = tmpRec.t
-      rec = tmpRec
-
-proc solveQuadratic*(a, b, c: float, t0, t1: var float): bool =
-  ## Copied from `pbrt` `efloat.h`.
-  ## Find quadratic discriminant
-  let discrim = b * b - 4.0 * a * c
-  if discrim < 0.0: return false
-  let rootDiscrim = sqrt(discrim)
-
-  #EFloat floatRootDiscrim(rootDiscrim, MachineEpsilon * rootDiscrim);
-
-  # Compute quadratic _t_ values
-  var q: float
-  if b < 0:
-    q = -0.5 * (b - rootDiscrim)
-  else:
-    q = -0.5 * (b + rootDiscrim)
-  t0 = q / a
-  t1 = c / q
-  if t0 > t1: swap(t0, t1)
-  result = true
 
 proc hit*(s: Sphere, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   let oc = r.orig
@@ -362,7 +242,6 @@ proc hit*(s: Sphere, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   rec.u = phi / (2*PI)
   rec.v = theta / PI
   rec.setFaceNormal(r, outward_normal.Vec3d)
-  rec.mat = s.mat
 
   result = true
 
@@ -380,7 +259,8 @@ proc hit*(cyl: Cylinder, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   # Check quadric shape _t0_ and _t1_ for nearest intersection
   if t0 > tMax or t1 <= tMin: return false
   var tShapeHit = t0
-  if tShapeHit <= 0:
+  ## XXX: This should be `tMin` no?
+  if tShapeHit <= tMin:
     tShapeHit = t1
     if tShapeHit > tMax: return false
 
@@ -425,7 +305,6 @@ proc hit*(cyl: Cylinder, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   rec.p = r.at(rec.t)
   let outward_normal = normalize(cross(dpdu, dpdv))
   rec.setFaceNormal(r, outward_normal.Vec3d)
-  rec.mat = cyl.mat
 
   result = true
 
@@ -444,7 +323,8 @@ proc hit*(con: Cone, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   # Check quadric shape _t0_ and _t1_ for nearest intersection
   if t0 > tMax or t1 <= tMin: return false
   var tShapeHit = t0
-  if tShapeHit <= 0:
+  ## XXX: This should be `tMin` no?
+  if tShapeHit <= tMin:
     tShapeHit = t1
     if tShapeHit > tMax: return false
 
@@ -478,7 +358,6 @@ proc hit*(con: Cone, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   rec.p = r.at(rec.t)
   let outward_normal = normalize(cross(dpdu, dpdv))
   rec.setFaceNormal(r, outward_normal.Vec3d)
-  rec.mat = con.mat
 
   result = true
 
@@ -533,7 +412,6 @@ proc hit*(par: Paraboloid, r: Ray, tMin, tMax: float, rec: var HitRecord): bool 
   rec.p = r.at(rec.t)
   let outward_normal = normalize(cross(dpdu, dpdv))
   rec.setFaceNormal(r, outward_normal.Vec3d)
-  rec.mat = par.mat
 
   rec.u = u
   rec.v = v
@@ -599,7 +477,6 @@ proc hit*(hyp: Hyperboloid, r: Ray, tMin, tMax: float, rec: var HitRecord): bool
   rec.p = r.at(rec.t)
   let outward_normal = normalize(cross(dpdu, dpdv))
   rec.setFaceNormal(r, outward_normal.Vec3d)
-  rec.mat = hyp.mat
 
   rec.u = u
   rec.v = v
@@ -628,13 +505,17 @@ proc hit*(d: Disk, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   let v = (d.radius - rHit) / (d.radius - d.innerRadius)
 
   ## XXX: compute normal from dpdu x dpdv?
-  #let dpdu = vec3(-phiMax * pHit.y, phiMax * pHit.x, 0)
-  #let dpdv = vec3(pHit.x, pHit.y, 0.0) * (d.innerRadius - d.radius) / rHit
+  let dpdu = vec3(-d.phiMax * pHit.y, d.phiMax * pHit.x, 0)
+  let dpdv = vec3(pHit.x, pHit.y, 0.0) * (d.innerRadius - d.radius) / rHit
+
+  # Refine disk intersection point
+  ## XXX?
+  # pHit.z = d.distance
+
   rec.t = t
   rec.p = r.at(rec.t)
-  let outward_normal = vec3(0.0, 0.0, 1.0)
+  let outward_normal = normalize(cross(dpdu, dpdv))#vec3(0.0, 0.0, 1.0)
   rec.setFaceNormal(r, outward_normal.Vec3d)
-  rec.mat = d.mat
 
   rec.u = u
   rec.v = v
@@ -654,7 +535,6 @@ proc hit*(rect: XyRect, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   rec.t = t
   let outward_normal = vec3(0.0, 0.0, 1.0)
   rec.setFaceNormal(r, outward_normal)
-  rec.mat = rect.mat
   rec.p = r.at(t)
   result = true
 
@@ -671,7 +551,6 @@ proc hit*(rect: XzRect, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   rec.t = t
   let outward_normal = vec3(0.0, 1.0, 0.0)
   rec.setFaceNormal(r, outward_normal)
-  rec.mat = rect.mat
   rec.p = r.at(t)
   result = true
 
@@ -688,47 +567,67 @@ proc hit*(rect: YzRect, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
   rec.t = t
   let outward_normal = vec3(1.0, 0.0, 0.0)
   rec.setFaceNormal(r, outward_normal)
-  rec.mat = rect.mat
   rec.p = r.at(t)
   result = true
 
-proc hit*(box: Box, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
+proc hit*[S: SomeSpectrum](h: Hittable[S], r: Ray, tMin, tMax: float, rec: var HitRecord[S]): bool {.gcsafe.}
+proc hit*(n: BvhNode, r: Ray, tMin, tMax: float, rec: var HitRecord): bool =
+  if not n.box.hit(r, tMin, tMax):
+    return false
+
+  let hitLeft = n.left.hit(r, tMin, tMax, rec)
+  let hitRight = n.right.hit(r, tMin, if hitLeft: rec.t else: tMax, rec)
+
+  result = hitLeft or hitRight
+
+proc hit*[S: SomeSpectrum](h: HittablesList[S], r: Ray, tMin, tMax: float, rec: var HitRecord[S]): bool {.gcsafe.} =
+  var tmpRec: HitRecord[S]
+  result = false
+  var closestSoFar = tMax
+
+  for obj in h:
+    if obj.hit(r, tMin, closestSoFar, tmpRec):
+      result = true
+      closestSoFar = tmpRec.t
+      rec = tmpRec
+
+proc hit*[S: SomeSpectrum](box: Box, r: Ray, tMin, tMax: float, rec: var HitRecord[S]): bool {.gcsafe.} =
   result = box.sides.hit(r, tMin, tMax, rec)
 
 template transforms(name, field: untyped): untyped =
-  proc `name`*(h: Hittable, v: Vec3d): Vec3d =
+  proc `name`*[S: SomeSpectrum](h: Hittable[S], v: Vec3d): Vec3d =
     ## Apply the world to object transformation for the given vector.
     # calculate transformed vector
     let vt = h.field * vec4d(v, w = 0) ## For vectors weight is always 1!
     # construct result vector. The weight row is irrelevant!
     result = vec3(vt.x, vt.y, vt.z)
 
-  proc `name`*(h: Hittable, p: Point): Point =
+  proc `name`*[S: SomeSpectrum](h: Hittable[S], p: Point): Point =
     ## Apply the world to object transformation for the given vector.
     # calculate transformed vector
     let vt = h.field * vec4d(p.Vec3d, w = 1) ## XXX: For points we *CURRENTLY* just assume weight 1
     # construct result Point
     result = Point(vec3(vt.x, vt.y, vt.z) / vt.w)
 
-  proc `name`*(h: Hittable, r: Ray): Ray =
+  proc `name`*[S: SomeSpectrum](h: Hittable[S], r: Ray): Ray =
     result = Ray(orig: h.name(r.orig), dir: h.name(r.dir))
 
 transforms(transform, trans)
 transforms(inverseTransform, invTrans)
 
-#proc transTransform*(h: Hittable, v: Vec3d): Vec3d =
+#proc transTransform*[S: SomeSpectrum](h: Hittable[S], v: Vec3d): Vec3d =
 #  var mh = h.clone()
 #  mh.trans = h.trans.transpose()
 #  result = mh.transform(v)
 
-proc invertNormal*(h: Hittable, n: Vec3d): Vec3d =
+proc invertNormal*[S: SomeSpectrum](h: Hittable[S], n: Vec3d): Vec3d =
   #var mh = h.clone()
   ### XXX: NOTE: if I'm not mistaken `pbrt` uses `inverse().transpose()` here.
   ### But if we do that the reflections on metals break if we use rotations.
   #mh.trans = h.trans.inverse() #.transpose()
   result = h.inverseTransform(n)  #mh.transform(n)
 
-proc hit*(h: Hittable, r: Ray, tMin, tMax: float, rec: var HitRecord): bool {.gcsafe.} =
+proc hit*[S: SomeSpectrum](h: Hittable[S], r: Ray, tMin, tMax: float, rec: var HitRecord[S]): bool {.gcsafe.} =
   # 1. transform to object space
   let rOb = h.transform(r)
   # 2. compute the hit
@@ -744,87 +643,24 @@ proc hit*(h: Hittable, r: Ray, tMin, tMax: float, rec: var HitRecord): bool {.gc
   of htXzRect:      result = h.hXzRect.hit(rOb, tMin, tMax, rec)
   of htYzRect:      result = h.hYzRect.hit(rOb, tMin, tMax, rec)
   of htBox:         result = h.hBox.hit(rOb, tMin, tMax, rec)
-  # 3. convert rec back to world space
+  #else: discard
+  # 3. assign material
+  rec.mat = h.mat
+  # 4. convert rec back to world space
   ## XXX: normal transformation in general more complex!
   ## `pbrt` uses `mInv` for *FORWARD* transformation!
   rec.normal = normalize(h.invertNormal(rec.normal))
   rec.p = h.inverseTransform(rec.p)
 
-proc boundingBox*(s: Sphere, output_box: var AABB): bool =
-  ##
-  output_box = initAabb(
-    - point(s.radius, s.radius, s.radius),
-    + point(s.radius, s.radius, s.radius)
-  )
-  result = true
-
-proc boundingBox*(s: Disk, output_box: var AABB): bool =
-  ## in z direction only a small width
-  output_box = initAabb(
-    - point(s.radius, s.radius, s.distance - 0.0001),
-    + point(s.radius, s.radius, s.distance + 0.0001)
-  )
-  result = true
-
-proc boundingBox*(cyl: Cylinder, output_box: var AABB): bool =
-  ## in z direction only a small width
-  output_box = initAabb( ## XXX: Could be from 0 to Height
-    - point(cyl.radius, cyl.radius, - 0.0001),
-    + point(cyl.radius, cyl.radius, cyl.zMax + 0.0001)
-  )
-  result = true
-
-proc boundingBox*(con: Cone, output_box: var AABB): bool =
-  output_box = initAabb(
-    - point(con.radius, con.radius, -0.0001),
-    + point(con.radius, con.radius, con.zMax + 0.0001)
-  )
-  result = true
-
-proc boundingBox*(con: Paraboloid, output_box: var AABB): bool =
-  #output_box = initAabb(
-  #  - point(con.radius, con.radius, -0.0001),
-  #  + point(con.radius, con.radius, con.zMax + 0.0001)
-  #)
-  #result = true
-  doAssert false, "IMPLEMENT"
-
-proc boundingBox*(con: Hyperboloid, output_box: var AABB): bool =
-  #output_box = initAabb(
-  #  - point(con.radius, con.radius, -0.0001),
-  #  + point(con.radius, con.radius, con.zMax + 0.0001)
-  #)
-  #result = true
-  doAssert false, "IMPLEMENT"
-
-
-proc boundingBox*(n: BvhNode, outputBox: var AABB): bool =
+proc boundingBox*[S: SomeSpectrum](n: BvhNode[S], outputBox: var AABB): bool =
   outputBox = n.box
-  result = true
-
-proc boundingBox*(r: XyRect, outputBox: var AABB): bool =
-  ## bounding box needs to have a non-zero width in each dimension!
-  outputBox = initAabb(point(r.x0, r.y0, r.k - 0.0001),
-                       point(r.x1, r.y1, r.k + 0.0001))
-  result = true
-
-proc boundingBox*(r: XzRect, outputBox: var AABB): bool =
-  ## bounding box needs to have a non-zero width in each dimension!
-  outputBox = initAabb(point(r.x0, r.k - 0.0001, r.z0),
-                       point(r.x1, r.k + 0.0001, r.z1))
-  result = true
-
-proc boundingBox*(r: YzRect, outputBox: var AABB): bool =
-  ## bounding box needs to have a non-zero width in each dimension!
-  outputBox = initAabb(point(r.k - 0.0001, r.y0, r.z0),
-                       point(r.k + 0.0001, r.y1, r.z1))
   result = true
 
 proc boundingBox*(b: Box, outputBox: var AABB): bool =
   outputBox = initAabb(b.boxMin, b.boxMax)
   result = true
 
-proc boundingBox*(h: Hittable, output_box: var AABB): bool =
+proc boundingBox*[S: SomeSpectrum](h: Hittable[S], output_box: var AABB): bool =
   case h.kind
   of htSphere:      result = h.hSphere.boundingBox(output_box)
   of htCylinder:    result = h.hCylinder.boundingBox(output_box)
@@ -838,7 +674,7 @@ proc boundingBox*(h: Hittable, output_box: var AABB): bool =
   of htYzRect:      result = h.hYzRect.boundingBox(output_box)
   of htBox:         result = h.hBox.boundingBox(output_box)
 
-proc boundingBox*(h: HittablesList, output_box: var AABB): bool =
+proc boundingBox*[S: SomeSpectrum](h: HittablesList[S], output_box: var AABB): bool =
   if h.len == 0:
     return false
 
@@ -852,29 +688,31 @@ proc boundingBox*(h: HittablesList, output_box: var AABB): bool =
     firstBox = false
   result = true
 
-proc box_compare(a, b: Hittable, axis: int): bool {.inline.} =
+proc box_compare[S: SomeSpectrum](a, b: Hittable[S], axis: int): int {.inline.} =
   var boxA: AABB
   var boxB: AABB
 
   if not a.boundingBox(boxA) or not b.boundingBox(boxB):
     stderr.write("No bounding box in BVH node constructor!\n")
 
-  result = boxA.minimum[axis] < boxB.minimum[axis]
+  result = if boxA.minimum[axis] < boxB.minimum[axis]: 1
+           elif boxA.minimum[axis] == boxB.minimum[axis]: 0
+           else: -1
 
-proc box_x_compare(a, b: Hittable): bool =
+proc box_x_compare[S: SomeSpectrum](a, b: Hittable[S]): int =
   result = boxCompare(a, b, 0)
 
-proc box_y_compare(a, b: Hittable): bool =
+proc box_y_compare[S: SomeSpectrum](a, b: Hittable[S]): int =
   result = boxCompare(a, b, 1)
 
-proc box_z_compare(a, b: Hittable): bool =
+proc box_z_compare[S: SomeSpectrum](a, b: Hittable[S]): int =
   result = boxCompare(a, b, 2)
 
-proc initBvhNode*(rnd: var Rand, list: HittablesList, start, stop: int): BvhNode =
+proc initBvhNode*[S: SomeSpectrum](rnd: var Rand, list: HittablesList[S], start, stop: int): BvhNode[S] =
   var mlist = list
 
   let axis = rnd.rand(2)
-  var comparator: (proc(a, b: Hittable): bool)
+  var comparator: (proc(a, b: Hittable[S]): int)
   case axis
   of 0: comparator = box_x_compare
   of 1: comparator = box_y_compare
@@ -886,7 +724,7 @@ proc initBvhNode*(rnd: var Rand, list: HittablesList, start, stop: int): BvhNode
     result.left = list[start]
     result.right = list[start]
   elif objSpan == 2:
-    if comparator(list[start], list[start+1]):
+    if comparator(list[start], list[start+1]) >= 0:
       result.left = list[start]
       result.right = list[start+1]
     else:
@@ -896,8 +734,8 @@ proc initBvhNode*(rnd: var Rand, list: HittablesList, start, stop: int): BvhNode
     mlist.sort(start, stop, comparator)
 
     let mid = start + objSpan div 2
-    result.left = Hittable(kind: htBvhNode, hBvhNode: rnd.initBvhNode(mlist, start, mid))
-    result.right = Hittable(kind: htBvhNode, hBvhNode: rnd.initBvhNode(mlist, mid, stop))
+    result.left = Hittable[S](kind: htBvhNode, hBvhNode: rnd.initBvhNode(mlist, start, mid))
+    result.right = Hittable[S](kind: htBvhNode, hBvhNode: rnd.initBvhNode(mlist, mid, stop))
 
   var boxLeft: AABB
   var boxRight: AABB
@@ -908,306 +746,81 @@ proc initBvhNode*(rnd: var Rand, list: HittablesList, start, stop: int): BvhNode
 
   result.box = surroundingBox(boxLeft, boxRight)
 
-proc initDiffuseLight*(a: Color): DiffuseLight =
-  result = DiffuseLight(emit: toTexture(a))
-
-proc initSolarEmission*(a: Color, fluxRadiusCDF: seq[float]): SolarEmission =
-  result = SolarEmission(emit: toTexture(a), fluxRadiusCDF: fluxRadiusCDF)
-
-proc initLaser*(a: Color): Laser =
-  result = Laser(emit: toTexture(a))
-
-proc initLambertian*(a: Color): Lambertian =
-  result = Lambertian(albedo: toTexture(a))
-
-proc initLambertian*(t: Texture): Lambertian =
-  result = Lambertian(albedo: t)
-
-proc initMetal*(a: Color, f: float): Metal =
-  result = Metal(albedo: a, fuzz: f)
-
-proc initDielectric*(ir: float): Dielectric =
-  result = Dielectric(ir: ir)
-
-proc initImageSensor*(width, height: int): ImageSensor =
-  result = ImageSensor(sensor: initSensor(width, height))
-
-proc initLightTarget*(a: Color, visible: bool): LightTarget =
-  result = LightTarget(albedo: toTexture(a), visible: visible)
-
-proc toMaterial*(m: Lambertian): Material = Material(kind: mkLambertian, mLambertian: m)
-proc toMaterial*(m: Metal): Material = Material(kind: mkMetal, mMetal: m)
-proc toMaterial*(m: Dielectric): Material = Material(kind: mkDielectric, mDielectric: m)
-proc toMaterial*(m: DiffuseLight): Material = Material(kind: mkDiffuseLight, mDiffuseLight: m)
-proc toMaterial*(m: SolarEmission): Material = Material(kind: mkSolarEmission, mSolarEmission: m)
-proc toMaterial*(m: Laser): Material = Material(kind: mkLaser, mLaser: m)
-proc toMaterial*(m: ImageSensor): Material = Material(kind: mkImageSensor, mImageSensor: m)
-proc toMaterial*(m: LightTarget): Material = Material(kind: mkLightTarget, mLightTarget: m)
-template initMaterial*[T: AnyMaterial](m: T): Material = m.toMaterial()
-
-proc initSphere*(center: Point, radius: float, mat: Material): Sphere =
-  result = Sphere(radius: radius, mat: mat)
-
-proc initDisk*(distance: float, radius: float, mat: Material): Disk =
-  result = Disk(distance: distance, radius: radius, mat: mat)
-
-proc initXyRect*(x0, x1, y0, y1, k: float, mat: Material): XyRect =
-  result = XyRect(x0: x0, x1: x1, y0: y0, y1: y1, k: k, mat: mat)
-
-proc initXzRect*(x0, x1, z0, z1, k: float, mat: Material): XzRect =
-  result = XzRect(x0: x0, x1: x1, z0: z0, z1: z1, k: k, mat: mat)
-
-proc initYzRect*(y0, y1, z0, z1, k: float, mat: Material): YzRect =
-  result = YzRect(y0: y0, y1: y1, z0: z0, z1: z1, k: k, mat: mat)
-
-proc initHyperboloid*(p1, p2: Point, phiMax: float, mat: Material): Hyperboloid =
-  ## Based on `pbrt`
-  var p1 = p1
-  var p2 = p2
-  result.phiMax = phiMax ## XXX: Make radians in the future!
-  let radius1 = sqrt(p1.x * p1.x + p1.y * p1.y)
-  let radius2 = sqrt(p2.x * p2.x + p2.y * p2.y)
-  result.rMax = max(radius1, radius2)
-  result.zMin = min(p1.z, p2.z)
-  result.zMax = max(p1.z, p2.z)
-  # Compute implicit function coefficients for hyperboloid
-  if result.p2.z == 0.0: swap(p1, p2)
-  var pp = p1
-  var
-    xy1: float
-    xy2: float
-  result.ah = Inf
-  result.ch = NaN
-  while classify(result.ah) == fcInf or classify(result.ah) == fcNaN:
-    pp = pp + 2.0 * (p2 - p1)
-    xy1 = pp.x * pp.x + pp.y * pp.y
-    xy2 = p2.x * p2.x + p2.y * p2.y
-    result.ah = (1.0 / xy1 - (pp.z * pp.z) / (xy1 * p2.z * p2.z)) /
-         (1.0 - (xy2 * pp.z * pp.z) / (xy1 * p2.z * p2.z))
-    result.ch = (result.ah * xy2 - 1) / (p2.z * p2.z)
-  result.p1 = p1
-  result.p2 = p2
-  result.mat = mat
-
 template rotations(name: untyped): untyped =
-  proc `name`*[T: AnyHittable](h: T, angle: float): Hittable =
-    result = h.toHittable()
-    result.trans = `name`(mat4d(), angle.degToRad)
-    result.invTrans = result.trans.inverse()
-  proc `name`*(h: Hittable, angle: float): Hittable =
+  proc `name`*[S: SomeSpectrum](h: Hittable[S], angle: float): Hittable[S] =
     result = h.clone()
     result.trans = `name`(h.trans, angle.degToRad)
     result.invTrans = result.trans.inverse()
-  proc `name`*(h: HittablesList, angle: float): HittablesList =
-    result = initHittables(h.len)
+  proc `name`*[S: SomeSpectrum](h: HittablesList[S], angle: float): HittablesList[S] =
+    result = initHittables[S](h.len)
     for x in h:
+      result.add name(x, angle)
+  proc `name`*(h: GenericHittablesList, angle: float): GenericHittablesList =
+    result = initGenericHittables()
+    for x in h.rgbs:
+      result.add name(x, angle)
+    for x in h.xray:
       result.add name(x, angle)
 rotations(rotateX)
 rotations(rotateY)
 rotations(rotateZ)
 
-proc translate*[T: AnyHittable; V: Vec3d | Point](h: T, v: V): Hittable =
-  result = h.toHittable()
-  result.trans = translate(mat4d(), -v.Vec3d)
-  result.invTrans = result.trans.inverse()
-proc translate*[V: Vec3d | Point; T: AnyHittable](v: V, h: T): Hittable = h.translate(v)
+#proc translate*[T: AnyHittable; V: Vec3d | Point](h: T, v: V): Hittable[S] =
+#  result = h.toHittable()
+#  result.trans = translate(mat4d(), -v.Vec3d)
+#  result.invTrans = result.trans.inverse()
+#proc translate*[V: Vec3d | Point; T: AnyHittable](v: V, h: T): Hittable[S] = h.translate(v)
 
-proc translate*[V: Vec3d | Point](h: Hittable, v: V): Hittable =
+proc translate*[S: SomeSpectrum; V: Vec3d | Point](h: Hittable[S], v: V): Hittable[S] =
   result = h.clone()
   result.trans = translate(h.trans, -v.Vec3d)
   result.invTrans = result.trans.inverse()
-proc translate*[V: Vec3d | Point](v: V, h: Hittable): Hittable = h.translate(v.Vec3d)
+proc translate*[S: SomeSpectrum; V: Vec3d | Point](v: V, h: Hittable[S]): Hittable[S] = h.translate(v.Vec3d)
 
-proc translate*(h: HittablesList, v: Vec3d | Point): HittablesList =
-  result = initHittables(h.len)
+proc translate*[S: SomeSpectrum](h: HittablesList[S], v: Vec3d | Point): HittablesList[S] =
+  result = initHittables[S](h.len)
   for x in h:
     result.add translate(x, v)
 
-proc initBox*(p0, p1: Point, mat: Material): Box =
-  result.boxMin = p0
-  result.boxMax = p1
-  result.mat = mat
+proc translate*(h: GenericHittablesList, v: Vec3d | Point): GenericHittablesList =
+  result = initGenericHittables()
+  result.add h.rgbs.translate(v)
+  result.add h.xray.translate(v)
 
-  result.sides = initHittables(0)
+## WARNING: This must not be a function! We risk the code *copying* the material, which is extremely
+## expensive for `SolarEmission`!
+template getMaterial*[S: SomeSpectrum](h: Hittable[S]): Material[S] = h.mat
 
-  result.sides.add initXyRect(p0.x, p1.x, p0.y, p1.y, p1.z, mat)
-  result.sides.add initXyRect(p0.x, p1.x, p0.y, p1.y, p0.z, mat)
-
-  result.sides.add initXzRect(p0.x, p1.x, p0.z, p1.z, p1.y, mat)
-  result.sides.add initXzRect(p0.x, p1.x, p0.z, p1.z, p0.y, mat)
-
-  result.sides.add initYzRect(p0.y, p1.y, p0.z, p1.z, p1.x, mat)
-  result.sides.add initYzRect(p0.y, p1.y, p0.z, p1.z, p0.x, mat)
-
-template lambertTargetBody(): untyped {.dirty.} =
-  var scatter_direction = rec.normal + rnd.randomUnitVector()
-
-  # catch degenerate scatter direction
-  if scatter_direction.nearZero():
-    scatter_direction = rec.normal
-
-  scattered = initRay(rec.p, scatter_direction, r_in.typ)
-  attenuation = m.albedo.value(rec.u, rec.v, rec.p)
-  result = true
-
-proc scatter*(m: Lambertian, rnd: var Rand,
-              r_in: Ray, rec: HitRecord,
-              attenuation: var Color, scattered: var Ray): bool {.gcsafe.}  =
-  lambertTargetBody()
-
-proc scatter*(m: LightTarget, rnd: var Rand,
-              r_in: Ray, rec: HitRecord,
-              attenuation: var Color, scattered: var Ray): bool {.gcsafe.}  =
-  ## Scatters light like a Lambertian if it's set to be visible and the incoming ray
-  ## comes from the `Camera`.
-  if m.visible and r_in.typ == rtCamera:
-    lambertTargetBody()
-
-proc scatter*(m: Metal, rnd: var Rand, r_in: Ray, rec: HitRecord,
-              attenuation: var Color, scattered: var Ray): bool {.gcsafe.}  =
-  var reflected = unitVector(r_in.dir).reflect(rec.normal)
-  scattered = initRay(rec.p, reflected + m.fuzz * rnd.randomInUnitSphere(), r_in.typ)
-  attenuation = m.albedo
-  result = scattered.dir.dot(rec.normal) > 0
-
-proc reflectance(cosine, refIdx: float): float =
-  ## use Schlick's approximation for reflectance
-  var r0 = (1 - refIdx) / (1 + refIdx)
-  r0 = r0 * r0
-  result = r0 + (1 - r0) * pow(1 - cosine, 5)
-
-proc scatter*(m: Dielectric,
-              rnd: var Rand,
-              r_in: Ray, rec: HitRecord,
-              attenuation: var Color, scattered: var Ray): bool {.gcsafe.}  =
-  attenuation = color(1.0, 1.0, 1.0)
-  let refractionRatio = if rec.frontFace: (1.0 / m.ir) else: m.ir
-
-  let unitDirection = unitVector(r_in.dir)
-  let cosTheta = min(dot(-unitDirection, rec.normal), 1.0)
-  let sinTheta = sqrt(1.0 - cosTheta * cosTheta)
-
-  let cannotRefract = refraction_ratio * sinTheta > 1.0
-  var direction: Vec3d
-
-  if cannotRefract or reflectance(cosTheta, refractionRatio) > rnd.rand(1.0):
-    direction = reflect(unitDirection, rec.normal)
-  else:
-    direction = refract(unitDirection, rec.normal, refractionRatio)
-
-  scattered = initRay(rec.p, direction, r_in.typ)
-  result = true
-
-type
-  NonEmittingMaterials* = Lambertian | Metal | Dielectric | LightTarget
-  EmittingMaterials* = DiffuseLight | Laser | ImageSensor
-
-proc scatter*[T: DiffuseLight | Laser | SolarEmission](
-  m: T,
-  rnd: var Rand,
-  r_in: Ray, rec: HitRecord,
-  attenuation: var Color, scattered: var Ray
-                                                     ): bool {.gcsafe.} =
-  ## Diffuse lights, lasers and solare emissions do not scatter!
-  result = false
-
-proc scatter*(m: ImageSensor, rnd: var Rand, r_in: Ray, rec: HitRecord,
-              attenuation: var Color, scattered: var Ray): bool {.gcsafe.} =
-  ## An image sensor is a perfect sink! (At least we assume so)
-  result = false
-  if r_in.typ == rtLight:
-    #echo "Hit at: ", (rec.u, rec.v)
-    let x = (rec.u * (m.sensor.width - 1).float).round.int
-    let y = (rec.v * (m.sensor.height - 1).float).round.int
-    m.sensor[x, y] = m.sensor[x, y] + 1
-
-proc scatter*(m: Material,
-              rnd: var Rand,
-              r_in: Ray, rec: HitRecord,
-              attenuation: var Color, scattered: var Ray): bool {.gcsafe.} =
-  case m.kind
-  of mkLambertian:    result = m.mLambertian.scatter(rnd, r_in, rec, attenuation, scattered)
-  of mkMetal:         result = m.mMetal.scatter(rnd, r_in, rec, attenuation, scattered)
-  of mkDielectric:    result = m.mDielectric.scatter(rnd, r_in, rec, attenuation, scattered)
-  of mkDiffuseLight:  result = m.mDiffuseLight.scatter(rnd, r_in, rec, attenuation, scattered)
-  of mkSolarEmission: result = m.mSolarEmission.scatter(rnd, r_in, rec, attenuation, scattered)
-  of mkLaser:         result = m.mLaser.scatter(rnd, r_in, rec, attenuation, scattered)
-  of mkImageSensor:   result = m.mImageSensor.scatter(rnd, r_in, rec, attenuation, scattered)
-  of mkLightTarget:   result = m.mLightTarget.scatter(rnd, r_in, rec, attenuation, scattered)
-
-proc emit*[T: NonEmittingMaterials](m: T, u, v: float, p: Point): Color =
-  ## Materials that don't emit just return black!
-  result = color(0, 0, 0)
-
-proc emit*[T: DiffuseLight | Laser | SolarEmission](m: T, u, v: float, p: Point): Color =
-  result = m.emit.value(u, v, p)
-
-import colormaps
-proc emit*(m: ImageSensor, u, v: float, p: Point): Color =
-  # adjust the sensor data
-  #echo "Emission at p = ", p, " (u, v) = ", (u, v)
-  let x = (u * (m.sensor.width - 1).float).round.int
-  let y = (v * (m.sensor.height - 1).float).round.int
-  let val = m.sensor[x, y]
-  if val > 0:
-    #echo val, " max ", m.sensor.currentMax[]
-    let cIdx = (val.float / m.sensor.currentMax[].float) * 255.0
-    let v = ViridisRaw[cIdx.round.int]
-    result = color(v[0], v[1], v[2])
-  else:
-    let v = ViridisRaw[0]
-    result = color(v[0], v[1], v[2])
-
-proc emit*(m: Material, u, v: float, p: Point): Color =
-  case m.kind
-  of mkLambertian:    result = m.mLambertian.emit(u, v, p)
-  of mkMetal:         result = m.mMetal.emit(u, v, p)
-  of mkDielectric:    result = m.mDielectric.emit(u, v, p)
-  of mkDiffuseLight:  result = m.mDiffuseLight.emit(u, v, p)
-  of mkSolarEmission: result = m.mSolarEmission.emit(u, v, p)
-  of mkLaser:         result = m.mLaser.emit(u, v, p)
-  of mkImageSensor:   result = m.mImageSensor.emit(u, v, p)
-  of mkLightTarget:   result = m.mLightTarget.emit(u, v, p)
-
-proc getMaterial*(h: Hittable): Material =
-  case h.kind
-  of htSphere:      result = h.hSphere.mat
-  of htCylinder:    result = h.hCylinder.mat
-  of htCone:        result = h.hCone.mat
-  of htParaboloid:  result = h.hParaboloid.mat
-  of htHyperboloid: result = h.hHyperboloid.mat
-  of htDisk:        result = h.hDisk.mat
-  of htBvhNode:     result = Material()
-  of htXyRect:      result = h.hXyRect.mat
-  of htXzRect:      result = h.hXzRect.mat
-  of htYzRect:      result = h.hYzRect.mat
-  of htBox:         result = h.hBox.mat
-
-proc getHittablesOfKind*(h: HittablesList, kinds: set[MaterialKind]): HittablesList =
+proc getHittablesOfKind*[S: SomeSpectrum](h: HittablesList[S], kinds: set[MaterialKind]): HittablesList[S] =
   ## Returns all hittables of materials of the given kinds from the given list as a list itself.
-  result = initHittables(0)
+  result = initHittables[S]()
   for x in h:
     let mat = x.getMaterial()
     if mat.kind in kinds: result.add x
 
-proc getImageSensors*(h: HittablesList): HittablesList =
+proc getImageSensors*[S: SomeSpectrum](h: HittablesList[S]): HittablesList[S] =
   ## Returns all image sensors from the given list as a list itself.
   result = getHittablesOfKind(h, {mkImageSensor})
 
-proc getLightTargets*(h: var HittablesList, delete: bool): HittablesList =
+proc getImageSensors*(h: GenericHittablesList): HittablesList[XraySpectrum] =
+  result = initHittables[XraySpectrum]()
+  result.add getImageSensors(toSpectrum(h.rgbs, XraySpectrum))
+  result.add getImageSensors(h.xray)
+
+proc getLightTargets*[S: SomeSpectrum](h: var HittablesList[S], delete: bool): HittablesList[S] =
   ## Returns all light targets from the given list as a list itself.
   result = getHittablesOfKind(h, {mkLightTarget})
   if delete:
     for x in result:
       h.delete(x)
 
-proc removeInvisibleTargets*(h: var HittablesList) =
+proc removeInvisibleTargets*[S: SomeSpectrum](h: var HittablesList[S]) =
   let lt = getLightTargets(h, delete = false)
   for x in lt:
     if not x.getMaterial.mLightTarget.visible:
       h.delete(x)
 
-proc getSources*(h: var HittablesList, delete: bool): HittablesList {.gcsafe.} =
+proc getSources*[S: SomeSpectrum](h: var HittablesList[S], delete: bool): HittablesList[S] {.gcsafe.} =
   ## Returns all light sources from the given list as a list itself.
   ## These are removed from the input.
   {.cast(gcsafe).}:
@@ -1218,6 +831,7 @@ proc getSources*(h: var HittablesList, delete: bool): HittablesList {.gcsafe.} =
 
 proc getRandomPointFromSolarModel(radius: float,
                                   fluxRadiusCDF: seq[float],
+                                  radii: seq[float],
                                   rnd: var Rand): Point =
   ## This function gives the coordinates of a random point in the sun, biased
   ## by the emissionrates (which depend on the radius and the energy) ##
@@ -1231,13 +845,14 @@ proc getRandomPointFromSolarModel(radius: float,
   let p = rnd.randomInUnitSphere() * r
   result = Point(p)
 
-proc samplePoint*(h: Hittable, rnd: var Rand): Point {.gcsafe.}
-proc samplePoint*(s: Sphere, rnd: var Rand): Point {.gcsafe.} =
+proc samplePoint*[S: SomeSpectrum](h: Hittable[S], rnd: var Rand): Point {.gcsafe.}
+proc samplePoint*(s: Sphere, rnd: var Rand, mat: Material): Point {.gcsafe.} =
   ## Samples a random point on the sphere surface
-  case s.mat.kind
+  case mat.kind
   of mkSolarEmission:
     ## Use the given emission properties of the solar model
-    result = getRandomPointFromSolarModel(s.radius, s.mat.mSolarEmission.fluxRadiusCDF, rnd)
+    let m = mat.mSolarEmission
+    result = getRandomPointFromSolarModel(s.radius, m.fluxRadiusCDF, m.radii, rnd)
   else:
     ## Sample uniformly from the sphere
     let p = rnd.randomInUnitSphere()
@@ -1291,15 +906,15 @@ proc samplePoint*(b: Box, rnd: var Rand): Point {.gcsafe.} =
   ## XXX: Correct by point p0, p1!
   result = samplePoint(b.sides[side], rnd)
 
-proc samplePoint*(b: BvhNode, rnd: var Rand): Point {.gcsafe.} =
+proc samplePoint*[S: SomeSpectrum](b: BvhNode[S], rnd: var Rand): Point {.gcsafe.} =
   doAssert false, "Cannot sample from a BvhNode"
 
-proc samplePoint*(h: Hittable, rnd: var Rand): Point {.gcsafe.} =
+proc samplePoint*[S: SomeSpectrum](h: Hittable[S], rnd: var Rand): Point {.gcsafe.} =
   ## Samples a point from the contained object by sampling uniformly
-  ## from the underlying geometry of the `Hittable` or potentially
+  ## from the underlying geometry of the `Hittable[S]` or potentially
   ## in a different way depending on the material.
   case h.kind
-  of htSphere:      result = h.hSphere.samplePoint(rnd)
+  of htSphere:      result = h.hSphere.samplePoint(rnd, h.mat)
   of htCylinder:    result = h.hCylinder.samplePoint(rnd)
   of htCone:        result = h.hCone.samplePoint(rnd)
   of htParaboloid:  result = h.hParaboloid.samplePoint(rnd)
@@ -1312,3 +927,19 @@ proc samplePoint*(h: Hittable, rnd: var Rand): Point {.gcsafe.} =
   of htBox:         result = h.hBox.samplePoint(rnd)
   # Convert point back to world space
   result = h.inverseTransform(result)
+
+proc getRadius*[S: SomeSpectrum](h: Hittable[S]): float =
+  ## Returns the radius of the given underlying shape. For shapes without a well defined radius
+  ## (rectangle) we return the width|height / 2.
+  case h.kind
+  of htSphere:      result = h.hSphere.radius
+  of htCylinder:    result = h.hCylinder.radius
+  of htCone:        result = h.hCone.radius
+  of htParaboloid:  result = h.hParaboloid.radius
+  of htHyperboloid: result = h.hHyperboloid.rMax
+  of htDisk:        result = h.hDisk.radius
+  of htBvhNode:     result = (h.hBvhNode.box.maximum - h.hBvhNode.box.minimum).length() / 2
+  of htXyRect:      result = max(h.hXyRect.y1 - h.hXyRect.y0, h.hXyRect.x1 - h.hXyRect.x0) / 2
+  of htXzRect:      result = max(h.hXzRect.z1 - h.hXzRect.z0, h.hXzRect.x1 - h.hXzRect.x0) / 2
+  of htYzRect:      result = max(h.hYzRect.z1 - h.hYzRect.z0, h.hYzRect.y1 - h.hYzRect.y0) / 2
+  of htBox:         result = (h.hBox.boxMax - h.hBox.boxMin).length() / 2
