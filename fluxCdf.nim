@@ -97,3 +97,30 @@ proc getFluxRadiusCDF*(solarModelFile: string): FluxData =
                     energyMin: energies.min,
                     energyMax: energies.max)
 
+
+## Move this to another file?
+import basetypes
+import nimhdf5
+type
+  Reflectivity* = object
+    layers*: seq[int]
+    interp*: seq[AngleInterpolator]
+
+proc setupReflectivity*(): Reflectivity =
+  const path = "llnl_layer_reflectivities.h5"
+  result = Reflectivity(
+    layers: @[3 - 1, 3+4 - 1, 3+4+4 - 1, 3+4+4+3 - 1] # layers of LLNL telescope
+  )
+  # read reflectivities from H5 file
+  let numCoatings = result.layers.len
+  var h5f = H5open(path, "r")
+  let energies = h5f["/Energy", float]
+  let angles = h5f["/Angles", float]
+  for i in 0 ..< numCoatings:
+    let reflDset = h5f[("Reflectivity" & $i).dset_str]
+    let data = reflDset[float].reshape2D(reflDset.shape)
+    result.interp.add initInterpolator(data,
+                                       angles.min, angles.max,
+                                       energies.min, energies.max,
+                                       angles.len)
+  discard h5f.close()
