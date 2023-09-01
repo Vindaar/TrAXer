@@ -1117,24 +1117,27 @@ proc sanityTelescopeOutput(i: int, r1, r5, pos, pos2, angle, lMirror, xSep, yL1,
     echo "Offset for layer ", i, " should be: ", yOffset, " \n==============================\n\n"
 
 from std/algorithm import lowerBound
-proc llnlLayerMaterial(layer: int, refl: Reflectivity, usePerfectMirror: bool,
+proc llnlLayerMaterial(layer: int, refl: Reflectivity,
+                       usePerfectMirror, brokenMirror: bool,
                        c: Color): Material[XraySpectrum] =
-  #let perfectMirror = initMaterial(initMetal(color(1.0, 0.0, 0.0), 0.0))
   ## Imperfect value assuming a 'figure error similar to NuSTAR of 1 arcmin'
   ## -> tan(1 ArcMin) (because fuzz added to unit vector)
   const ImperfectVal = 0.0002908880082045767
-  #let imperfectMirror = initMaterial(initMetal(color(1.0, 0.0, 0.0), ImperfectVal))
-  #let mat = if usePerfectMirror: perfectMirror else: imperfectMirror
 
   let idx = refl.layers.lowerBound(layer)
   let R = refl.interp[idx]
-  #let c = color(1.0, 0.0, 0.0)
   let fuzz = if usePerfectMirror: 0.0 else: ImperfectVal
   ## NOTE: we use the 1 - reflectivity as a placeholder for the real transmission. This _should_ be
   ## correct, but in reality there will be mismatches
   result = toMaterial initXrayMatter(c, fuzz, R, 1.0 - R)
 
-proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope, usePerfectMirror: bool): GenericHittablesList =
+proc brokenMirror(c: Color): Material[RGBSpectrum] =
+  # broken mirror simply uses a Lambertian to effectively disable reflections through the telescope
+  result = toMaterial initLambertian(c)
+
+proc llnlTelescope(tel: Telescope, magnet: Magnet,
+                   fullTelescope, usePerfectMirror, brokenMirror, ignoreMirrorThickness: bool,
+                   mirrorThickness: float): GenericHittablesList =
   ## Constructs the actual LLNL telescope
   ##
   ## Pos for the 'first' layers should be correct, under the following two conditions:
@@ -1142,6 +1145,56 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope, usePerfectMirr
   ##    Currently the center of the front shell is aligned with the bottom.
   ## 2. it's not clear what part of the shells should align vertically as discussed with Julia and Jaime in Cristinas office.
   ##    The front? The center? The back? Currently I align at the center.
+  proc cone[S: SomeSpectrum](r, h: float, tel: Telescope, mat: Material[S]): Hittable[S] =
+    result = toHittable(Cone(radius: r, height: h, zMax: tel.lMirror,
+                             phiMax: tel.mirrorSize.degToRad),
+                        mat)
+  proc cyl[S: SomeSpectrum](r, h: float, tel: Telescope, mat: Material[S]): Hittable[S] =
+    result = toHittable(Cylinder(radius: r, zMin: 0.0, zMax: tel.lMirror,
+                                 phiMax: tel.mirrorSize.degToRad),
+                        mat)
+  proc disk(r, thick: float, tel: Telescope, mat: Material[RGBSpectrum]): Hittable[RGBSpectrum] =
+    result = toHittable(Disk(distance: 0.0, radius: r + thick, innerRadius: r, phiMax: tel.mirrorSize.degToRad), mat)
+
+
+  proc transform[S: SomeSpectrum](h: Hittable[S], xOrigin, yOffset, z: float, tel: Telescope): Hittable[S] =
+    result = h.rotateZ(tel.mirrorSize / 2.0) # rotate out half the miror size to center "top" of mirror
+      .translate(vec3(xOrigin, 0.0, -tel.lMirror / 2.0)) # move to its center
+      #.rotateY(angle) ## For a cylinder telescope
+      .rotateX(180.0) # we consider from magnet!
+      .rotateZ(-90.0)
+      .translate(vec3(0.0, yOffset, z + tel.lMirror / 2.0)) # move to its final position
+
+  proc setCone[S: SomeSpectrum](r, angle, y, z: float,
+                                fullTelescope, ignoreMirrorThickness: bool,
+                                mirrorThickness: float,
+                                tel: Telescope, magnet: Magnet, mat: Material[S]): GenericHittablesList =
+    # `xOffset` is the displacement from front to center of mirror (x because cone with `phiMax`
+    # starts from x = 0)
+    result = initGenericHittables()
+    let xOffset = (sin(angle.degToRad) * tel.lMirror) / 2.0
+    let height = calcHeight(r, angle) # total height of the cone that yields required radius and angle
+
+    let c = cone(r, height, tel, mat)
+    #let c = cyl(r, height) ## To construct a fake telescope
+    # for the regular telescope first move to -r + xOffset to rotate around center of layer. Full no movement
+    let xOrigin = if fullTelescope: 0.0 else: -r + xOffset # aligns *center* of mirror
+    let yOffset = if fullTelescope: 0.0 else: y - magnet.radius # move down by bore radius & offset
+    result.add c.transform(xOrigin, yOffset, z, tel)
+    if not ignoreMirrorThickness:
+      ## Sets the outer casing so to say of each mirror. That is a `Disk` at the front
+      ## which blocks some light and the "upper" part. Both are opaque to X-rays.
+      let mat = initMaterial(initLambertian(color(0.2, 0.2, 0.2)))
+      let thick =
+        if classify(mirrorThickness) != fcInf: mirrorThickness
+        else: tel.allThickness.mean ## Default 0.2 mm
+      # Front: a piece of a disk (= a ring) of `thick` thickness
+      let d = disk(r, thick, tel, mat)
+      # Top: another cone equivalent to `c` above, just moved up by `thick`
+      let c = cone(r, height, tel, mat)
+      result.add d.transform(xOrigin, yOffset, z, tel)
+      result.add c.transform(xOrigin, yOffset + thick, z, tel)
+
   const sanity = false
   let
     lMirror = tel.lMirror
@@ -1156,44 +1209,29 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope, usePerfectMirr
       r4 = r5 + lMirror * sin(3.0 * angle.degToRad)
     let (ySep, yL1, yL2) = calcYlYsep(angle, xSep, lMirror)
     # `pos`, `pos2` are the `y` positions of first & second set of mirrors.
-    let pos = (r1 - r1_0) ## Only shift each layer relative to first layer. Other displacement done in `setCone`
-    let pos2 = pos - yL1 / 2.0 - yL2 / 2.0 - ySep
+    let pos1 = (r1 - r1_0) ## Only shift each layer relative to first layer. Other displacement done in `setCone`
+    let pos2 = pos1 - yL1 / 2.0 - yL2 / 2.0 - ySep
+    # cone of the front (= towards magnet) shell
+    template con1[S: SomeSpectrum](mat: Material[S]): untyped =
+      setCone(r1, angle,     pos1, lMirror + xSep,
+              fullTelescope, ignoreMirrorThickness, mirrorThickness,
+              tel, magnet, mat)
+    # cone of the rear (= towards detector) shell
+    template con2[S: SomeSpectrum](mat: Material[S]): untyped =
+      ## NOTE: using `r1` as well reproduces the X-ray finger results from the _old_ raytracer!
+      setCone(r4, 3 * angle, pos2, 0.0,
+              fullTelescope, ignoreMirrorThickness, mirrorThickness,
+              tel, magnet, mat)
+    ## Add mirrors with correct materials (different types!)
+    if not brokenMirror:
+      let mat = llnlLayerMaterial(i, reflectivity, usePerfectMirror, brokenMirror, color(1,0,0))
+      result.add con1(mat)
+      result.add con2(mat)
+    else:
+      result.add con1(brokenMirror(color(1,0,0)))
+      result.add con2(brokenMirror(color(1,0,0)))
     if sanity:
-      sanityTelescopeOutput(i, r1, r5, pos, pos2, angle, lMirror, xSep, yL1, yL2, ySep, magnet.radius)
-    proc setCone[S: SomeSpectrum](r, angle, y, z: float, fullTelescope: bool, tel: Telescope, magnet: Magnet, mat: Material[S]): Hittable[S] =
-      # `xOffset` is the displacement from front to center of mirror (x because cone with `phiMax`
-      # starts from x = 0)
-      let xOffset = (sin(angle.degToRad) * lMirror) / 2.0
-      let height = calcHeight(r, angle) # total height of the cone that yields required radius and angle
-      proc cone[S: SomeSpectrum](r, h: float, tel: Telescope, mat: Material[S]): Hittable[S] =
-        result = toHittable(Cone(radius: r, height: h, zMax: lMirror,
-                                 phiMax: tel.mirrorSize.degToRad),
-                            mat)
-      proc cyl[S: SomeSpectrum](r, h: float, tel: Telescope, mat: Material[S]): Hittable[S] =
-        result = toHittable(Cylinder(radius: r, zMin: 0.0, zMax: lMirror,
-                                     phiMax: tel.mirrorSize.degToRad),
-                            mat)
-
-      let c = cone(r, height, tel, mat)
-      #let c = cyl(r, height) ## To construct a fake telescope
-      # for the regular telescope first move to -r + xOffset to rotate around center of layer. Full no movement
-      let xOrigin = if fullTelescope: 0.0 else: -r + xOffset # aligns *center* of mirror
-      let yOffset = if fullTelescope: 0.0 else: y - magnet.radius # move down by bore radius & offset
-      var h = c.rotateZ(tel.mirrorSize / 2.0) # rotate out half the miror size to center "top" of mirror
-        .translate(vec3(xOrigin, 0.0, -lMirror / 2.0)) # move to its center
-        #.rotateY(angle) ## For a cylinder telescope
-        .rotateX(180.0) # we consider from magnet!
-        .rotateZ(-90.0)
-        .translate(vec3(0.0, yOffset, z + lMirror / 2.0)) # move to its final position
-      result = h
-
-    let mat1 = llnlLayerMaterial(i, reflectivity, usePerfectMirror, color(1.0, 0.0, 0.0))
-    let mat2 = llnlLayerMaterial(i, reflectivity, usePerfectMirror, color(0.0, 1.0, 0.0))
-    let con  = setCone(r1, angle,     pos,  lMirror + xSep, fullTelescope, tel, magnet, mat1)
-    ## NOTE: using `r1` as well reproduces the X-ray finger results from the _old_ raytracer!
-    let con2 = setCone(r4, 3 * angle, pos2, 0.0,            fullTelescope, tel, magnet, mat2)
-    result.add con
-    result.add con2
+      sanityTelescopeOutput(i, r1, r5, pos1, pos2, angle, lMirror, xSep, yL1, yL2, ySep, magnet.radius)
 
 proc initSetup(fullTelescope: bool): (Telescope, Magnet) =
   if not fullTelescope:
@@ -1224,7 +1262,11 @@ proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, 
                windowRotation = 30.0,
                windowZOffset = 3.0,
                ignoreWindow = false,
-               sensorKind = sCount
+               sensorKind = sCount,
+               brokenMirrors = false, # disables telescope mirror reflection for debugging
+               midTelescopeSensor = false,
+               ignoreMirrorThickness = false,
+               mirrorThickness = Inf, # adjust mirror thickenss. 0.2 by default
               ): GenericHittablesList =
   ## Mirrors centered at lMirror/2.
   ## Entire telescope
@@ -1259,15 +1301,32 @@ proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, 
                                     windowZOffset = windowZOffset, ignoreWindow = ignoreWindow,
                                     sensorKind = sensorKind)
   telescopeImSensor.add graphiteSpacer(llnl, magnet, fullTelescope = false)
-  telescopeImSensor.add llnlTelescope(llnl, magnet, fullTelescope = false, usePerfectMirror = usePerfectMirror)
+  telescopeImSensor.add llnlTelescope(llnl, magnet, fullTelescope = false,
+                                      usePerfectMirror = usePerfectMirror, brokenMirror = brokenMirrors,
+                                      ignoreMirrorThickness = ignoreMirrorThickness,
+                                      mirrorThickness = mirrorThickness)
   objs.add telescopeImSensor
     .rotateZ(setupRotation - telescopeRotation)
+
+  if midTelescopeSensor: # sensor placed between both telescope mirror sets. Useful to debug image after set 1
+    objs.add imageSensor(llnl, magnet, fullTelescope = false,
+                         pixelsW = 1000, pixelsH = 1000,
+                         sensorW = magnet.radius * 2, sensorH = magnet.radius * 2,
+                         ignoreWindow = true,
+                         sensorKind = sensorKind,
+                         posOverride = point(0.0, 0.0, llnl.lMirror + 2.0))
+
   ## XXX: BVH node of the telescope is currently broken! Bad shading.
   #result.add telescope #rnd.initBvhNode(telescope)
   result.add objs
 
 proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
-                    solarModelFile: string): GenericHittablesList =
+                    solarModelFile: string,
+                    brokenMirrors = false, # disables telescope mirror reflection for debugging
+                    midTelescopeSensor = false,
+                    ignoreMirrorThickness = false,
+                    mirrorThickness = Inf, # adjust mirror thickenss. 0.2 by default
+                   ): GenericHittablesList =
   ## Mirrors centered at lMirror/2.
   ## Entire telescope
   ##   lMirror  xsep  lMirror
@@ -1301,7 +1360,10 @@ proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: b
   telMag.add target(llnl, magnet, visibleTarget)
   telMag.add magnetBore(magnet, magnetPos)
   telMag.add graphiteSpacer(llnl, magnet, fullTelescope = false)
-  telMag.add llnlTelescope(llnl, magnet, fullTelescope = false, usePerfectMirror = usePerfectMirror)
+  telMag.add llnlTelescope(llnl, magnet, fullTelescope = false,
+                           usePerfectMirror = usePerfectMirror, brokenMirror = brokenMirrors,
+                           ignoreMirrorThickness = ignoreMirrorThickness,
+                           mirrorThickness = mirrorThickness)
 
   ## XXX: FIX THE -83!
   objs.add telMag.rotateZ(-90.0)
@@ -1314,7 +1376,12 @@ proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: b
 
 proc sceneLLNLFullTelescope(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
                             solarModelFile: string,
-                            rayAt = 1.0): GenericHittablesList =
+                            rayAt = 1.0,
+                            brokenMirrors = false, # disables telescope mirror reflection for debugging
+                            midTelescopeSensor = false,
+                            ignoreMirrorThickness = false,
+                            mirrorThickness = Inf, # adjust mirror thickenss. 0.2 by default
+                           ): GenericHittablesList =
   ## Mirrors centered at lMirror/2.
   ## Entire telescope
   ##   lMirror  xsep  lMirror
@@ -1342,7 +1409,10 @@ proc sceneLLNLFullTelescope(rnd: var Rand, visibleTarget, gridLines, usePerfectM
 
   var telescope = initGenericHittables()
   telescope.add graphiteSpacer(llnl, magnet, fullTelescope = true)
-  telescope.add llnlTelescope(llnl, magnet, fullTelescope = true, usePerfectMirror = usePerfectMirror)
+  telescope.add llnlTelescope(llnl, magnet, fullTelescope = true,
+                              usePerfectMirror = usePerfectMirror, brokenMirror = brokenMirrors,
+                              ignoreMirrorThickness = ignoreMirrorThickness,
+                              mirrorThickness = mirrorThickness)
   objs.add telescope
 
   ## XXX: BVH node of the telescope is currently broken! Bad shading.
@@ -1373,12 +1443,19 @@ proc main(width = 600,
           windowRotation = 30.0,
           windowZOffset = 3.0,
           ignoreWindow = false,
-          sensorKind = sCount
+          sensorKind = sCount,
+          brokenMirrors = false, # disables telescope mirror reflection for debugging
+          midTelescopeSensor = false,
+          ignoreMirrorThickness = false,
+          mirrorThickness = Inf, # adjust mirror thickenss. 0.2 by default
          ) =
   # Image
   THREADS = nJobs
   #const ratio = 16.0 / 9.0 #16.0 / 9.0
   const ratio = 1.0
+
+  ## XXX: It's about time for a `Config` or `Context` object to store all the parameters...
+
   let img = Image(width: width, height: (width.float / ratio).int)
   let samplesPerPixel = 100
   var rnd = initRand(0x299792458)
@@ -1407,14 +1484,29 @@ proc main(width = 600,
       lookFrom = point(-42.12957189166389, -77.3883974697615, -1252.584896902418)
 
     if fullTelescope:
-      world = rnd.sceneLLNLFullTelescope(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile, rayAt)
+      world = rnd.sceneLLNLFullTelescope(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile, rayAt,
+                                         brokenMirrors, # disables telescope mirror reflection for debugging
+                                         midTelescopeSensor,
+                                         ignoreMirrorThickness,
+                                         mirrorThickness) # adjust mirror thickenss. 0.2 by default
+
     elif llnlTwice:
-      world = rnd.sceneLLNLTwice(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile)
+      world = rnd.sceneLLNLTwice(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile,
+                                 brokenMirrors, # disables telescope mirror reflection for debugging
+                                 midTelescopeSensor,
+                                 ignoreMirrorThickness,
+                                 mirrorThickness) # adjust mirror thickenss. 0.2 by default
+
     else:
       echo "Visible target? ", visibleTarget
       world = rnd.sceneLLNL(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile, rayAt,
                             setupRotation, telescopeRotation, windowRotation, windowZOffset, ignoreWindow,
-                            sensorKind)
+                            sensorKind,
+                            brokenMirrors, # disables telescope mirror reflection for debugging
+                            midTelescopeSensor,
+                            ignoreMirrorThickness,
+                            mirrorThickness) # adjust mirror thickenss. 0.2 by default
+
   elif spheres:
     world = rnd.randomScene(useBvh = false) ## Currently BVH broken
     lookFrom = point(0,1.5,-2.0)
