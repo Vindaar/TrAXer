@@ -100,6 +100,41 @@ proc rayColor*[S: SomeSpectrum](c: Camera, rnd: var Rand, r: Ray, world: Hittabl
     let t = 0.5 * (unitDirection.y + 1.0)
     result = (1.0 - t) * color(1.0, 1.0, 1.0) + t * color(0.5, 0.7, 1.0)
 
+proc rayColorRecurse*[S: SomeSpectrum](
+  c: Camera, rnd: var Rand, r: Ray, world: HittablesList[S], depth: int,
+  accumulatedSpectrum: var S
+                                     ): S {.gcsafe.} =
+  var rec: HitRecord[S]
+
+  if depth <= 0:
+    return toSpectrum(color(0, 0, 0), S)
+
+  if world.hit(r, 0.001, Inf, rec):
+    #if r.typ == rtLight:
+    #  echo "Hit ", depth
+    var scattered: Ray
+    var attenuation = accumulatedSpectrum ## NOTE: `attenuation` starts with the current accumulated spectrum.
+                                          ## That way `scatter` can both look at the current value while still
+                                          ## using it as a buffer!
+    #if r.typ == rtLight and rec.mat.kind == mkImageSensor:
+    #  echo "Current attenuation: ", attenuation
+    var emitted = rec.mat.emit(rec.u, rec.v, rec.p)
+    if not rec.mat.scatter(rnd, r, rec, attenuation, scattered):
+      result = emitted
+    else:
+      # Accumulate the spectrum down the call chain, that way `scatter` sees the up to date attenuation
+      accumulatedSpectrum = accumulatedSpectrum * attenuation + emitted
+      result = attenuation * c.rayColorRecurse(rnd, scattered, world, depth - 1, accumulatedSpectrum) + emitted
+  else:
+    result = toSpectrum(c.background, S)
+proc rayColorRecurse*[S: SomeSpectrum](
+  c: Camera, rnd: var Rand, r: Ray, world: HittablesList[S], depth: int,
+  accumulatedSpectrum: S = toSpectrum(1, S)
+                                     ): S {.gcsafe.} =
+  ## Overload for no `accumulatedSpectrum` or non `var` argument.
+  var spectrum = accumulatedSpectrum # variable only needed due to recursive calls to update
+  result = rayColorRecurse(c, rnd, r, world, depth, spectrum)
+
 proc rayColorAndPos*[S: SomeSpectrum](c: Camera, rnd: var Rand, r: Ray,
                                       initialColor: S, world: HittablesList[S],
                                       depth: int): (S, float, float) {.gcsafe.} =
@@ -298,7 +333,7 @@ proc renderSdlFrame(ctx: RenderContext) =
       #if x.int >= window.w: continue
       #if y.int >= window.h: continue
       let r = camera.getRay(ctx.rnd, x, y)
-      color = camera.rayColor(ctx.rnd, r, ctx.world, maxDepth)
+      color = toColor(camera.rayColorRecurse(ctx.rnd, r, ctx.world, maxDepth))
       yIdx = y #height - y - 1
       xIdx = x
     of ttLights:
@@ -320,7 +355,7 @@ proc renderSdlFrame(ctx: RenderContext) =
       for _ in 0 ..< 1:
         let (r, initialColor) = ctx.rnd.sampleRay(ctx.sources, ctx.targets)
         # 2. trace it
-        let c = camera.rayColor(ctx.rnd, r, ctx.worldNoSources, maxDepth)
+        let c = camera.rayColorRecurse(ctx.rnd, r, ctx.worldXray, maxDepth, initialColor)
         # this color itself is irrelevant, but might illuminate the image sensor!
 
     let bufIdx = yIdx * height + xIdx

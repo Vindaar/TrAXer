@@ -841,7 +841,9 @@ proc getRandomPointFromSolarModel(radius: float,
   let
     randEmRate = rnd.rand(1.0)
     rIdx = fluxRadiusCDF.lowerBound(randEmRate)
-    r = (0.0015 + (rIdx).float * 0.0005) * radius # in mm
+    r = radii[rIdx] * radius
+    r2 = (0.0015 + (rIdx).float * 0.0005) * radius # in mm
+  doAssert abs(r2 - r) < 1e-3, "r2 = " & $r2 & ", r = " & $r
   let p = rnd.randomInUnitSphere() * r
   result = Point(p)
 
