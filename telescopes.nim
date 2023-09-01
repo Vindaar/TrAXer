@@ -14,7 +14,7 @@ type
     optics_exit*: seq[float] # seq[MilliMeter]
     telescope_turned_x*: float#Degree
     telescope_turned_y*: float#Degree
-    allThickness*: seq[float] # seq[MilliMeter]
+    glassThickness*: float # seq[MilliMeter]
     allR1*: seq[float] # seq[MilliMeter]
     allR5*: seq[float] # seq[MilliMeter]
     xSep*: float # MilliMeter
@@ -47,8 +47,7 @@ proc initTelescope*(kind: TelescopeKind, mirrorSize: float): Telescope =
       telescope_turned_y: 0.0, #.°, #the angle by which the telescope is turned in respect to the magnet
       # Measurements of the Telescope mirrors in the following, R1 are the radii of the mirror shells at the entrance of the mirror
       # the radii of the shells
-      allThickness: @[0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2,
-                      0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.2], #.mapIt(it.mm),
+      glassThickness: 0.21, # mm. The LLNL / NuSTAR glass is not 0.2mm, but 0.21 mm thick!
       # the radii of the shells
       allR1: @[63.006, 65.606, 68.305, 71.105, 74.011, 77.027, 80.157,
                83.405, 86.775, 90.272, 93.902, 97.668, 101.576, 105.632], #mapIt(it.mm),

@@ -1187,7 +1187,7 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet,
       let mat = initMaterial(initLambertian(color(0.2, 0.2, 0.2)))
       let thick =
         if classify(mirrorThickness) != fcInf: mirrorThickness
-        else: tel.allThickness.mean ## Default 0.2 mm
+        else: tel.glassThickness ## Default 0.21 mm
       # Front: a piece of a disk (= a ring) of `thick` thickness
       let d = disk(r, thick, tel, mat)
       # Top: another cone equivalent to `c` above, just moved up by `thick`
