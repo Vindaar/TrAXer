@@ -243,11 +243,15 @@ proc initSpectrum*[S: SomeSpectrum](data: seq[float], energyMin, energyMax: floa
   ## This assumes the given `data` covers the range `energyMin` to `energyMax`!
   const numSamples = when S is RGBSpectrum: 3 else: NumSamples
   var samples: array[numSamples, float]
-  let energies = linspace(energyMin, energyMax, data.len)
-  let linear = newLinear1D(energies, data)
-  let energiesSamples = linspace(energyMin, energyMax, numSamples)
-  for i, E in energiesSamples:
-    samples[i] = linear.eval(E)
+  if data.len != numSamples:
+    let energies = linspace(energyMin, energyMax, data.len)
+    let linear = newLinear1D(energies, data)
+    let energiesSamples = linspace(energyMin, energyMax, numSamples)
+    for i, E in energiesSamples:
+      samples[i] = linear.eval(E)
+  else: # already sampled, just copy
+    for i in 0 ..< numSamples:
+      samples[i] = data[i]
   result = spectrumFromSampled[S](samples, energyMin, energyMax)
 
 proc initXraySpectrum*(data: seq[float], energyMin, energyMax: float): XraySpectrum =
