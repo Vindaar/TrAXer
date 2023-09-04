@@ -1136,6 +1136,7 @@ proc brokenMirror(c: Color): Material[RGBSpectrum] =
   result = toMaterial initLambertian(c)
 
 proc llnlTelescope(tel: Telescope, magnet: Magnet,
+                   energyMin, energyMax: float,
                    fullTelescope, usePerfectMirror, brokenMirror, ignoreMirrorThickness: bool,
                    mirrorThickness: float): GenericHittablesList =
   ## Constructs the actual LLNL telescope
@@ -1267,6 +1268,7 @@ proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, 
                midTelescopeSensor = false,
                ignoreMirrorThickness = false,
                mirrorThickness = Inf, # adjust mirror thickenss. 0.2 by default
+               ignoreSpacer = false
               ): GenericHittablesList =
   ## Mirrors centered at lMirror/2.
   ## Entire telescope
@@ -1300,8 +1302,11 @@ proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, 
                                     windowRotation = windowRotation,
                                     windowZOffset = windowZOffset, ignoreWindow = ignoreWindow,
                                     sensorKind = sensorKind)
-  telescopeImSensor.add graphiteSpacer(llnl, magnet, fullTelescope = false)
-  telescopeImSensor.add llnlTelescope(llnl, magnet, fullTelescope = false,
+  if not ignoreSpacer:
+    telescopeImSensor.add graphiteSpacer(llnl, magnet, fullTelescope = false)
+  telescopeImSensor.add llnlTelescope(llnl, magnet,
+                                      energyMin, energyMax,
+                                      fullTelescope = false,
                                       usePerfectMirror = usePerfectMirror, brokenMirror = brokenMirrors,
                                       ignoreMirrorThickness = ignoreMirrorThickness,
                                       mirrorThickness = mirrorThickness)
@@ -1322,10 +1327,12 @@ proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, 
 
 proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
                     solarModelFile: string,
+                    energyMin, energyMax: float,
                     brokenMirrors = false, # disables telescope mirror reflection for debugging
                     midTelescopeSensor = false,
                     ignoreMirrorThickness = false,
                     mirrorThickness = Inf, # adjust mirror thickenss. 0.2 by default
+                    ignoreSpacer = false
                    ): GenericHittablesList =
   ## Mirrors centered at lMirror/2.
   ## Entire telescope
@@ -1359,8 +1366,11 @@ proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: b
   # Need two targets in both source cases
   telMag.add target(llnl, magnet, visibleTarget)
   telMag.add magnetBore(magnet, magnetPos)
-  telMag.add graphiteSpacer(llnl, magnet, fullTelescope = false)
-  telMag.add llnlTelescope(llnl, magnet, fullTelescope = false,
+  if not ignoreSpacer:
+    telMag.add graphiteSpacer(llnl, magnet, fullTelescope = false)
+  telMag.add llnlTelescope(llnl, magnet,
+                           energyMin, energyMax,
+                           fullTelescope = false,
                            usePerfectMirror = usePerfectMirror, brokenMirror = brokenMirrors,
                            ignoreMirrorThickness = ignoreMirrorThickness,
                            mirrorThickness = mirrorThickness)
@@ -1376,11 +1386,13 @@ proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: b
 
 proc sceneLLNLFullTelescope(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
                             solarModelFile: string,
+                            energyMin, energyMax: float,
                             rayAt = 1.0,
                             brokenMirrors = false, # disables telescope mirror reflection for debugging
                             midTelescopeSensor = false,
                             ignoreMirrorThickness = false,
                             mirrorThickness = Inf, # adjust mirror thickenss. 0.2 by default
+                            ignoreSpacer = false
                            ): GenericHittablesList =
   ## Mirrors centered at lMirror/2.
   ## Entire telescope
@@ -1408,16 +1420,26 @@ proc sceneLLNLFullTelescope(rnd: var Rand, visibleTarget, gridLines, usePerfectM
   objs.add imageSensor(llnl, magnet, fullTelescope = true, rayAt = rayAt)
 
   var telescope = initGenericHittables()
-  telescope.add graphiteSpacer(llnl, magnet, fullTelescope = true)
-  telescope.add llnlTelescope(llnl, magnet, fullTelescope = true,
+  if not ignoreSpacer:
+    telescope.add graphiteSpacer(llnl, magnet, fullTelescope = true)
+  telescope.add llnlTelescope(llnl, magnet,
+                              energyMin, energyMax,
+                              fullTelescope = true,
                               usePerfectMirror = usePerfectMirror, brokenMirror = brokenMirrors,
                               ignoreMirrorThickness = ignoreMirrorThickness,
                               mirrorThickness = mirrorThickness)
   objs.add telescope
-
   ## XXX: BVH node of the telescope is currently broken! Bad shading.
   #result.add telescope #rnd.initBvhNode(telescope)
   result.add objs
+
+proc calcEnergyRange(min, max, energy: float): (float, float) =
+  const ΔE = 0.05 # rangle all `NumSamples` in this range
+  if classify(energy) != fcInf:
+    result = (energy - ΔE, energy + ΔE)
+  else:
+    result = (max(min, 0.03), max)
+  echo "[INFO] Using energy range: ", result, " keV."
 
 proc main(width = 600,
           maxDepth = 5,
@@ -1448,17 +1470,22 @@ proc main(width = 600,
           midTelescopeSensor = false,
           ignoreMirrorThickness = false,
           mirrorThickness = Inf, # adjust mirror thickenss. 0.2 by default
+          ignoreSpacer = false,
+          energyMin = 0.0, # keV
+          energyMax = 15.0, # keV
+          energy = Inf # If given produce only signals at *this* energy. Overrides min / max
          ) =
   # Image
   THREADS = nJobs
   #const ratio = 16.0 / 9.0 #16.0 / 9.0
   const ratio = 1.0
-
   ## XXX: It's about time for a `Config` or `Context` object to store all the parameters...
-
   let img = Image(width: width, height: (width.float / ratio).int)
   let samplesPerPixel = 100
   var rnd = initRand(0x299792458)
+
+  # determine the correct energy ranges
+  let (energyMin, energyMax) = calcEnergyRange(energyMin, energyMax, energy)
   # World
   ## Looking at mirrors!
   var lookFrom: Point = point(1,1,1)
@@ -1484,28 +1511,36 @@ proc main(width = 600,
       lookFrom = point(-42.12957189166389, -77.3883974697615, -1252.584896902418)
 
     if fullTelescope:
-      world = rnd.sceneLLNLFullTelescope(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile, rayAt,
+      world = rnd.sceneLLNLFullTelescope(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile,
+                                         energyMin, energyMax,
+                                         rayAt,
                                          brokenMirrors, # disables telescope mirror reflection for debugging
                                          midTelescopeSensor,
                                          ignoreMirrorThickness,
-                                         mirrorThickness) # adjust mirror thickenss. 0.2 by default
+                                         mirrorThickness, # adjust mirror thickenss. 0.2 by default
+                                         ignoreSpacer)
 
     elif llnlTwice:
       world = rnd.sceneLLNLTwice(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile,
+                                 energyMin, energyMax,
                                  brokenMirrors, # disables telescope mirror reflection for debugging
                                  midTelescopeSensor,
                                  ignoreMirrorThickness,
-                                 mirrorThickness) # adjust mirror thickenss. 0.2 by default
+                                 mirrorThickness, # adjust mirror thickenss. 0.2 by default
+                                 ignoreSpacer)
 
     else:
       echo "Visible target? ", visibleTarget
-      world = rnd.sceneLLNL(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile, rayAt,
+      world = rnd.sceneLLNL(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile,
+                            energyMin, energyMax,
+                            rayAt,
                             setupRotation, telescopeRotation, windowRotation, windowZOffset, ignoreWindow,
                             sensorKind,
                             brokenMirrors, # disables telescope mirror reflection for debugging
                             midTelescopeSensor,
                             ignoreMirrorThickness,
-                            mirrorThickness) # adjust mirror thickenss. 0.2 by default
+                            mirrorThickness,# adjust mirror thickenss. 0.2 by default
+                            ignoreSpacer)
 
   elif spheres:
     world = rnd.randomScene(useBvh = false) ## Currently BVH broken
