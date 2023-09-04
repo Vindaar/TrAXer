@@ -3,7 +3,7 @@ import macros, math, random, strformat
 import glm
 export glm
 
-const NumSamples {.intdefine.} = 60
+const NumSamples* {.intdefine.} = 60
 
 type
   Image* = object
@@ -286,9 +286,9 @@ makeMathSpectrum(`*`)
 
 type
   AngleInterpolator* = object
-    anglesMin: float
-    anglesMax: float
-    numAngles: int
+    anglesMin*: float
+    anglesMax*: float
+    numAngles*: int
     data*: seq[XraySpectrum] ## Stores all energy slices, one for each angle
 
 proc initInterpolator*(data: seq[seq[float]],
