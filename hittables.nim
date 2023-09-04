@@ -100,23 +100,33 @@ proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](x: Box[S], _: typedesc[T]): B
   result = Box[T](boxMin: x.boxMin, boxMax: x.boxMax,
                   sides: toSpectrum(x.sides, T))
 
-proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](h: Hittable[S], _: typedesc[T]): Hittable[T] =
+## Two annoying helper templates, because now the Nim compiler doesn't allow constructing a
+## variant object from a runtime value anymore, if the object has default values...
+template initIt(it, it2: untyped): untyped =
   result = Hittable[T](mat: toSpectrum(h.mat, T),
                        trans: h.trans,
                        invTrans: h.invTrans,
-                       kind: h.kind)
+                       kind: it, it2: h.it2)
+template initItVal(it, it2, val: untyped): untyped  =
+  result = Hittable[T](mat: toSpectrum(h.mat, T),
+                       trans: h.trans,
+                       invTrans: h.invTrans,
+                       kind: it, it2: val)
+
+proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](h: Hittable[S], _: typedesc[T]): Hittable[T] =
+
   case h.kind
-  of htSphere:      result.hSphere = h.hSphere
-  of htCylinder:    result.hCylinder = h.hCylinder
-  of htCone:        result.hCone = h.hCone
-  of htParaboloid:  result.hParaboloid = h.hParaboloid
-  of htHyperboloid: result.hHyperboloid = h.hHyperboloid
-  of htBvhNode:     result.hBvhNode = toSpectrum(h.hBvhNode, T)
-  of htXyRect:      result.hXyRect = h.hXyRect
-  of htXzRect:      result.hXzRect = h.hXzRect
-  of htYzRect:      result.hYzRect = h.hYzRect
-  of htBox:         result.hBox = toSpectrum(h.hBox, T)
-  of htDisk:        result.hDisk = h.hDisk
+  of htSphere:      initIt(htSphere, hSphere)
+  of htCylinder:    initIt(htCylinder, hCylinder)
+  of htCone:        initIt(htCone, hCone)
+  of htParaboloid:  initIt(htParaboloid, hParaboloid)
+  of htHyperboloid: initIt(htHyperboloid, hHyperboloid)
+  of htBvhNode:     initItVal(htBvhNode, hBvhNode, toSpectrum(h.hBvhNode, T))
+  of htXyRect:      initIt(htXyRect, hXyRect)
+  of htXzRect:      initIt(htXzRect, hXzRect)
+  of htYzRect:      initIt(htYzRect, hYzRect)
+  of htBox:         initItVal(htBox, hBox, toSpectrum(h.hBox, T))
+  of htDisk:        initIt(htDisk, hDisk)
 
 proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](h: HittablesList[S], _: typedesc[T]): HittablesList[T] =
   result = initHittables[T](h.len)
