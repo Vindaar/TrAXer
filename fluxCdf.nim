@@ -97,16 +97,103 @@ proc getFluxRadiusCDF*(solarModelFile: string): FluxData =
                     energyMin: energies.min,
                     energyMax: energies.max)
 
+import xrayAttenuation
+
+template getLayers(): untyped =
+  const ρC = 2.26.g•cm⁻³ # 2.267 should be correct. used number same as DarpanX however
+  const ρPt = 21.41.g•cm⁻³ # 21.45 should be correct. used number same as DarpanX however
+  const ρGlass = 2.65.g•cm⁻³
+
+  let C = Carbon.init(ρC)
+  let Pt = Platinum.init(ρPt)
+  let glass = compound((Si, 1), (O, 2), ρ = ρGlass) # pure quartz glass
+
+  let m1 = initDepthGradedMultilayer(
+    substrate = glass,
+    top = C, bottom = Pt,
+    dMin = 11.5.nm, dMax = 22.5.nm,
+    Γ = 0.45,
+    c = 1.0,
+    N = 2,
+    σ = 0.45.nm
+  )
+  let m2 = initDepthGradedMultilayer(
+    substrate = glass,
+    top = C, bottom = Pt,
+    dMin = 7.0.nm, dMax = 19.nm,
+    Γ = 0.45,
+    c = 1.0,
+    N = 3,
+    σ = 0.45.nm
+  )
+  let m3 = initDepthGradedMultilayer(
+    substrate = glass,
+    top = C, bottom = Pt,
+    dMin = 5.5.nm, dMax = 16.nm,
+    Γ = 0.4,
+    c = 1.0,
+    N = 4,
+    σ = 0.45.nm
+  )
+  let m4 = initDepthGradedMultilayer(
+    substrate = glass,
+    top = C, bottom = Pt,
+    dMin = 5.0.nm, dMax = 14.0.nm,
+    Γ = 0.4,
+    c = 1.0,
+    N = 5,
+    σ = 0.45.nm
+  )
+  @[m1, m2, m3, m4]
+
+proc calculateReflectivity[T; B; S](recipe: DepthGradedMultilayer[T, B, S],
+                                    angleMin, angleMax: Degree,
+                                    energyMin, energyMax: keV,
+                                    numAngle, numEnergy: int): seq[seq[float]] =
+  let Energy = linspace(energyMin.float, energyMax.float, numEnergy) # scan in a range wider than we use in the raytracer
+  let θs = linspace(angleMin.float, angleMax.float, numAngle) # [0.5] # the angle under which we check
+  var refl = zeros[float]([θs.len, Energy.len])
+  for i, θ in θs:
+    for j, E in Energy:
+      # 1. compute the refractive indices for each layer
+      refl[i, j] = recipe.reflectivity(θ.°, E.keV, parallel = false)
+  result = refl.toSeq2D
 
 ## Move this to another file?
 import basetypes
-import nimhdf5
+## XXX: cacheme currently not working, due to compiler bug about static array type from `copyflat`
+# import cacheme
 type
   Reflectivity* = object
     layers*: seq[int]
     interp*: seq[AngleInterpolator]
 
-proc setupReflectivity*(): Reflectivity =
+proc setupReflectivity*(energyMin, energyMax: float,
+                        numSamples: int, # `numSamples` so that it will be encoded in the cached data and
+                                         # to only compute as many samples as really needed!
+                        angleMin = 0.0, angleMax = 15.0,
+                        numAngle = 1000
+                       ): Reflectivity = #  {.cacheMe: "resources/reflectivity_cache".} =
+  let angleMin = angleMin.°
+  let angleMax = angleMax.°
+  let energyMin = energyMin.keV
+  let energyMax = energyMax.keV
+  result = Reflectivity(
+    layers: @[3 - 1, 3+4 - 1, 3+4+4 - 1, 3+4+4+3 - 1] # layers of LLNL telescope
+  )
+  # read reflectivities from H5 file
+  let numCoatings = result.layers.len
+  let ms = getLayers()
+  echo "energy min: ", energyMin, " max ", energyMax
+  for m in ms:
+    let data = calculateReflectivity(m, angleMin, angleMax, energyMin, energyMax, numAngle, numSamples)
+    result.interp.add initInterpolator(data,
+                                       angleMin.float, angleMax.float,
+                                       energyMin.float, energyMax.float,
+                                       numAngle)
+
+import nimhdf5
+proc setupReflectivityFromH5*(): Reflectivity =
   const path = "llnl_layer_reflectivities.h5"
   result = Reflectivity(
     layers: @[3 - 1, 3+4 - 1, 3+4+4 - 1, 3+4+4+3 - 1] # layers of LLNL telescope

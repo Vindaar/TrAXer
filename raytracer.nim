@@ -1200,7 +1200,7 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet,
   let
     lMirror = tel.lMirror
     xSep = tel.xSep
-  let reflectivity = setupReflectivity() ## `fluxCDF.nim`
+  let reflectivity = setupReflectivity(energyMin, energyMax, NumSamples) ## `fluxCDF.nim`
   let r1_0 = tel.allR1[0]
   for i in 0 ..< tel.allR1.len:
     let
@@ -1255,6 +1255,7 @@ proc initSetup(fullTelescope: bool): (Telescope, Magnet) =
 
 proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
                solarModelFile: string,
+               energyMin, energyMax: float,
                rayAt = 1.0,
                setupRotation = 90.0, # Angle the entire setup is rotated. This is the rotation to bring the downward pointing
                                      # setup to the realistic sideways setup.
