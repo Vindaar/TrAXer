@@ -1380,11 +1380,16 @@ proc sceneLLNL(rnd: var Rand, cfg: Config): GenericHittablesList =
                          sensorW = magnet.radius * 2, sensorH = magnet.radius * 2,
                          posOverride = point(0.0, 0.0, llnl.lMirror + 2.0),
                          ignoreWindow = true)
+
+  if cfg.endTelescopeSensor: # sensor placed between both telescope mirror sets. Useful to debug image after set 1
+    let α0 = 3.0 * llnl.allAngles[0].degToRad
+    let offset = (2 * llnl.lMirror) * sin(α0)
+    objs.add imageSensor(llnl, magnet, fullTelescope = false, cfg = cfg,
                          pixelsW = 1000, pixelsH = 1000,
                          sensorW = magnet.radius * 2, sensorH = magnet.radius * 2,
-                         ignoreWindow = true,
-                         sensorKind = sensorKind,
-                         posOverride = point(0.0, 0.0, llnl.lMirror + 2.0))
+                         posOverride = point(0.0, -offset, -10.0), # put back by 10 mm
+                         ignoreWindow = true)
+      .rotateZ(cfg.setupRotation - cfg.telescopeRotation)
 
   ## XXX: BVH node of the telescope is currently broken! Bad shading.
   #result.add telescope #rnd.initBvhNode(telescope)
