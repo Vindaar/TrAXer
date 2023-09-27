@@ -1131,6 +1131,19 @@ proc gridLines(tel: Telescope, magnet: Magnet): GenericHittablesList =
     .translate(vec3(0.0, 0.0, z1))
   result.add xLine2
 
+  ## Line that touches the front part of the second set of mirrors, if they are
+  ## aligned at the front
+  let screen = toMaterial(initDiffuseLight(color(1.0, 1.0, 0.0)))
+  let yScreen = toHittable(initBox(point(-magnet.radius * 1.2, -magnet.radius * 1.2, 0.0),
+                                   point( magnet.radius * 1.2,  magnet.radius * 1.2, 0.0)),
+                        screen)
+  let yLine0 = yScreen#toHittable(Cylinder(radius: 0.1, zMin: -100.0, zMax: 100, phiMax: 360.0.degToRad), cylMetal)
+    .rotateZ(90.0) # rotate so that it stands up
+  result.add yLine0
+  let yLine1 = yLine0.translate(vec3(0.0, 0.0, tel.lMirror)) # forward to its position
+  result.add yLine1
+
+
 proc calcYlYsep(angle, xSep, lMirror: float): (float, float, float) =
   ## Helper to compute displacement of each set of mirrors and the y distance
   ## given by the angles due to mirror rotation
