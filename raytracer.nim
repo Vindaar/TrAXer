@@ -1096,7 +1096,13 @@ proc imageSensor(tel: Telescope, magnet: Magnet,
     result.add windowStrongback(cfg.windowRotation, cfg.windowZOffset)
   let target = if posOverride != point(0,0,0): posOverride
                else: llnlFocalPoint(tel, magnet, cfg.rayAt, fullTelescope)
+  ## Determine the angle the sensor must be rotated to point directly at the telescope
+  ## exit instead of straight towards `dir = (0, 0, 1)`.
+  let targetRay = llnlFocalPointRay(tel, magnet, fullTelescope = false)
+  let zRay = initRay(target, vec3(0.0, 0.0, 1.0), rtCamera)
+  let angle = arccos( abs dot(targetRay.dir.normalize, zRay.dir.normalize) ).radToDeg
   result = result
+    .rotateX(angle)
     .rotateZ(cfg.telescopeRotation)
     .translate(target)
 
