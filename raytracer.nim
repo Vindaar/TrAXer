@@ -1146,8 +1146,10 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet,
   ##    Currently the center of the front shell is aligned with the bottom.
   ## 2. it's not clear what part of the shells should align vertically as discussed with Julia and Jaime in Cristinas office.
   ##    The front? The center? The back? Currently I align at the center.
-  proc cone[S: SomeSpectrum](r, h: float, tel: Telescope, mat: Material[S]): Hittable[S] =
-    result = toHittable(Cone(radius: r, height: h, zMax: tel.lMirror,
+  proc cone[S: SomeSpectrum](r, h, zMax: float, tel: Telescope, mat: Material[S]): Hittable[S] =
+    ## Important: the `zMax` of a cone is literally its maximum height along the `z` axis. This means
+    ## it is _not_ lMirror!
+    result = toHittable(Cone(radius: r, height: h, zMax: zMax,
                              phiMax: tel.mirrorSize.degToRad),
                         mat)
   proc cyl[S: SomeSpectrum](r, h: float, tel: Telescope, mat: Material[S]): Hittable[S] =
@@ -1162,7 +1164,7 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet,
     result = h.rotateZ(tel.mirrorSize / 2.0) # rotate out half the miror size to center "top" of mirror
       .translate(vec3(xOrigin, 0.0, -tel.lMirror / 2.0)) # move to its center
       #.rotateY(angle) ## For a cylinder telescope
-      .rotateX(180.0) # we consider from magnet!
+      .rotateX(180.0) # we consider from magnet! This also means the magnet side of the telescope is aligned!
       .rotateZ(-90.0)
       .translate(vec3(0.0, yOffset, z + tel.lMirror / 2.0)) # move to its final position
 
@@ -1176,7 +1178,8 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet,
     let xOffset = (sin(angle.degToRad) * tel.lMirror) / 2.0
     let height = calcHeight(r, angle) # total height of the cone that yields required radius and angle
 
-    let c = cone(r, height, tel, mat)
+    let zMax = cos(angle.degToRad) * tel.lMirror
+    let c = cone(r, height, zMax, tel, mat)
     #let c = cyl(r, height) ## To construct a fake telescope
     # for the regular telescope first move to -r + xOffset to rotate around center of layer. Full no movement
     let xOrigin = if fullTelescope: 0.0 else: -r + xOffset # aligns *center* of mirror
@@ -1192,7 +1195,7 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet,
       # Front: a piece of a disk (= a ring) of `thick` thickness
       let d = disk(r, thick, tel, mat)
       # Top: another cone equivalent to `c` above, just moved up by `thick`
-      let c = cone(r, height, tel, mat)
+      let c = cone(r, height, zMax, tel, mat)
       result.add d.transform(xOrigin, yOffset, z, tel)
       result.add c.transform(xOrigin, yOffset + thick, z, tel)
 
