@@ -108,6 +108,17 @@ proc randomInUnitSphere*(rnd: var Rand): Vec3d =
     if p.length_squared >= 1: continue
     return p
 
+proc randomInNormalDist*(rnd: var Rand): Vec3d =
+  ## Returns a vector drawn from a normal distribution for each position. So it describes
+  ## a ball weighted by a normal distribution from the center. Its standard deviation
+  ## is taken to be 1 == 1 mm in our units.
+  let x = rnd.gauss(mu = 0.0, sigma = 1.0 / sqrt(3.0))
+  let y = rnd.gauss(mu = 0.0, sigma = 1.0 / sqrt(3.0))
+  let z = rnd.gauss(mu = 0.0, sigma = 1.0 / sqrt(3.0))
+  let l = sqrt(x*x + y*y + z*z)
+  let uvN = rnd.randomInUnitSphere().normalize
+  result = uvN * l
+
 proc randomUnitVector*(rnd: var Rand): Vec3d =
   result = unitVector(rnd.randomInUnitSphere())
 
