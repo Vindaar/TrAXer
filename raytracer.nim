@@ -1200,7 +1200,12 @@ proc llnlLayerMaterial(layer: int, refl: Reflectivity,
                        c: Color): Material[XraySpectrum] =
   ## Imperfect value assuming a 'figure error similar to NuSTAR of 1 arcmin'
   ## -> tan(1 ArcMin) (because fuzz added to unit vector)
-  const ImperfectVal = 0.0002908880082045767
+  ## Square root because there are 2 expected reflections and the 1 arcmin isfor
+  ## the full telescope
+  #const ImperfectVal = pow(0.000290887991795424, 2.0) # / 3.0
+  #const ImperfectVal = pow(0.000290887991795424, 1.5) # / 3.0
+  const ImperfectVal = pow(0.000290887991795424, 1.2) # / 3.0
+  #const ImperfectVal = pow(0.000290887991795424, 1.1)
 
   let idx = refl.layers.lowerBound(layer)
   let R = refl.interp[idx]
