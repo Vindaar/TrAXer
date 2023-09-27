@@ -2,7 +2,7 @@ import strformat, os, terminal, macros, math, random, times
 
 import basetypes, hittables, camera
 
-import arraymancer
+import arraymancer, unchained
 
 import sdl2 except Color, Point
 
@@ -27,7 +27,76 @@ type
   TracingType = enum
     ttCamera, ttLights
 
+  SourceKind = enum
+    skSun, skXrayFinger, skParallelXrayFinger
+
+  Config = object
+    visibleTarget: bool
+    gridLines: bool
+    usePerfectMirror: bool
+    sourceKind: SourceKind
+    solarModelFile: string
+    energyMin: float
+    energyMax: float
+    rayAt = 1.0
+    setupRotation = 90.0 # Angle the entire setup is rotated. This is the rotation to bring the downward pointing
+                          # setup to the realistic sideways setup.
+    telescopeRotation = 14.17 # *Additional* rotation of the telescope on top of `setupRotation`.
+                               # Separate to include real rotation aside from pointing the entire setup.
+    windowRotation = 30.0
+    windowZOffset = 3.0
+    ignoreWindow = false
+    ignoreMagnet = true ## Whether to include the magnet
+    ignoreMirrorThickness = false
+    ignoreSpacer = false
+    mirrorThickness = Inf # adjust mirror thickenss. 0.2 by default
+
+    sensorKind = sCount
+    brokenMirrors = false # disables telescope mirror reflection for debugging
+    midTelescopeSensor = false
+    endTelescopeSensor = false # An ~ImageSensor~ directly at the end of the telescope. Useful to view
+                               # the illumination of the telescope
+
+    # X-ray source fields
+    sourceDistance = 14.2.m # distance of the source ``from the telescope entrance``
+    sourceRadius = 3.0.mm
+
 var Tracing = ttCamera
+
+proc initConfig(visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
+                solarModelFile: string,
+                energyMin, energyMax: float,
+                rayAt, setupRotation, telescopeRotation, windowRotation, windowZOffset: float,
+                ignoreWindow: bool,
+                sensorKind: SensorKind,
+                brokenMirrors: bool,
+                midTelescopeSensor, endTelescopeSensor: bool,
+                ignoreMirrorThickness: bool,
+                mirrorThickness: float,
+                ignoreSpacer: bool,
+                sourceDistance: Meter, sourceRadius: MilliMeter): Config =
+  result = Config(visibleTarget: visibleTarget,
+                  gridLines: gridLines,
+                  usePerfectMirror: usePerfectMirror,
+                  sourceKind: sourceKind,
+                  solarModelFile: solarModelFile,
+                  energyMin: energyMin,
+                  energyMax: energyMax,
+                  rayAt: rayAt,
+                  setupRotation: setupRotation,
+                  telescopeRotation: telescopeRotation,
+                  windowRotation: windowRotation,
+                  windowZOffset: windowZOffset,
+                  ignoreWindow: ignoreWindow,
+                  sensorKind: sensorKind,
+                  brokenMirrors: brokenMirrors,
+                  midTelescopeSensor: midTelescopeSensor,
+                  endTelescopeSensor: endTelescopeSensor,
+                  ignoreMirrorThickness: ignoreMirrorThickness,
+                  mirrorThickness: mirrorThickness,
+                  ignoreSpacer: ignoreSpacer,
+                  sourceDistance: sourceDistance,
+                  sourceRadius: sourceRadius)
 
 proc initRenderContext(rnd: var Rand,
                        buf: ptr UncheckedArray[uint32], counts: ptr UncheckedArray[int],
@@ -859,10 +928,6 @@ proc earth(): Hittable[RGBSpectrum] =
   const EarthR = 6_371_000.0 # Meter, not MilliMeter, but we keep it...
   result = translate(point(0, -EarthR - 5000, 0), toHittable(Sphere(radius: EarthR), groundMaterial))
 
-type
-  SourceKind = enum
-    skSun, skXrayFinger, skParallelXrayFinger
-
 import fluxCdf
 proc sun(solarModelFile: string): Hittable[XraySpectrum] =
   ## Adds the Sun
@@ -888,27 +953,28 @@ proc sun(solarModelFile: string): Hittable[XraySpectrum] =
   ## XXX: in principle need to apply correct x AU distance here if `solarModelFile` supplied!
   result = translate(point(0, 0, AU), toHittable(Sphere(radius: SunR), sunMaterial))
 
-proc xrayFinger(tel: Telescope, magnet: Magnet, magnetPos: float, kind: SourceKind): Hittable[XraySpectrum] =
+proc xrayFinger(tel: Telescope, magnet: Magnet, magnetPos: float, cfg: Config): Hittable[XraySpectrum] =
   ## Adds an X-ray finger
   ## Define the X-ray source
-  case kind
+  ## XXX: Add energy information to light source, then assign correct RGB color matching
+  ## the energyMin & max values if we don't use skSun!
+  case cfg.sourceKind
   of skParallelXrayFinger:
     let sunMaterial = toSpectrum(initMaterial(initLaser(color(1.0, 1.0, 0.5))), XraySpectrum)
     result = translate(point(0, 0, magnetPos + 9.26 * 1000.0), toHittable(Disk(distance: 0.0, radius: magnet.radius), sunMaterial))
     #result = translate(point(0, 0, magnetPos + 9.26 * 1000.0 + 100_000.0), toHittable(Disk(distance: 0.0, radius: magnet.radius), sunMaterial))
   of skXrayFinger: # classical emission allowing all angles
-    ## X-ray finger as mentioned in the PhD thesis of A. Jakobsen (14.2 m distance, 3 mm radius)
+    ## X-ray finger as mentioned in the PhD thesis of A. Jakobsen (14.2 m distance, 3 mm radius), CAST nature mentions
+    ## 12 m. Radius is more questionable in both. PANTER: 128m and point source.
     let sunMaterial = toSpectrum(initMaterial(initDiffuseLight(color(1.0, 1.0, 0.5))), XraySpectrum)
-    result = translate(point(0, 0, magnetPos + 14.2 * 1000.0), toHittable(Disk(distance: 0.0, radius: 3.0), sunMaterial))
-    ## X-ray finger as mentioned in CAST Nature paper ~12 m distance
-    #result = translate(point(0, 0, magnetPos + 12.0 * 1000.0), toHittable(Disk(distance: 0.0, radius: 3.0), sunMaterial))
+    result = translate(point(0, 0, magnetPos + cfg.sourceDistance.to(MilliMeter).float),
+                       toHittable(Disk(distance: 0.0, radius: cfg.sourceRadius.float), sunMaterial))
   else: doAssert false, "Invalid branch, not an X-ray finger."
 
-proc source(tel: Telescope, magnet: Magnet, magnetPos: float, sourceKind: SourceKind,
-            solarModelFile: string): Hittable[XraySpectrum] =
-  case sourceKind
-  of skSun: result = sun(solarModelFile)
-  of skXrayFinger, skParallelXrayFinger: result = xrayFinger(tel, magnet, magnetPos, sourceKind)
+proc source(tel: Telescope, magnet: Magnet, magnetPos: float, cfg: Config): Hittable[XraySpectrum] =
+  case cfg.sourceKind
+  of skSun: result = sun(cfg.solarModelFile)
+  of skXrayFinger, skParallelXrayFinger: result = xrayFinger(tel, magnet, magnetPos, cfg)
 
 proc target(tel: Telescope, magnet: Magnet,
             visibleTarget: bool): Hittable[XraySpectrum] =
@@ -916,21 +982,17 @@ proc target(tel: Telescope, magnet: Magnet,
   ## (the side towards the telescope)
   let z = tel.length() ## Position of telescope end on magnet side
   let pink = color(1.0, 0.05, 0.9)
-  result = toHittable(Disk(distance: 0.0, radius: magnet.radius),
+  #result = toHittable(Disk(distance: 0.0, radius: magnet.radius),
+  result = toHittable(Disk(distance: 0.0, radius: magnet.radius * 1.2),
                       toSpectrum(toMaterial(initLightTarget(pink, visibleTarget)), XraySpectrum))
     .translate(vec3(0.0, 0.0, z + magnet.length))
 
-proc lightSource(tel: Telescope, magnet: Magnet,
-                 magnetPos: float,
-                 sourceKind: SourceKind,
-                 visibleTarget: bool,
-                 solarModelFile: string
-                ): GenericHittablesList =
+proc lightSource(tel: Telescope, magnet: Magnet, magnetPos: float, cfg: Config): GenericHittablesList =
   ## Constructs a light source as well as the optional target if needed.
   result = initGenericHittables()
-  result.add source(tel, magnet, magnetPos, sourceKind, solarModelFile)
-  if sourceKind != skParallelXrayFinger:
-    result.add target(tel, magnet, visibleTarget)
+  result.add source(tel, magnet, magnetPos, cfg)
+  if cfg.sourceKind != skParallelXrayFinger:
+    result.add target(tel, magnet, cfg.visibleTarget)
 
 proc magnetBore(magnet: Magnet, magnetPos: float): Hittable[RGBSpectrum] =
   let cylMetal = initMaterial(initMetal(color(0.2, 0.2, 0.6), 0.8))
@@ -1013,32 +1075,29 @@ proc llnlFocalPoint(tel: Telescope, magnet: Magnet, rayAt: float, fullTelescope:
 
 proc imageSensor(tel: Telescope, magnet: Magnet,
                  fullTelescope: bool,
+                 cfg: Config,
                  pixelsW = 400,
                  pixelsH = 400,
                  sensorW = 14.0,
                  sensorH = 14.0,
                  sensorThickness = 0.1,
-                 rayAt = 1.0,
-                 telescopeRotation = 0.0, # Need to inverse rotate the sensor to align it *before* translating
-                 windowRotation = 30.0,
-                 windowZOffset = 3.0,
-                 ignoreWindow = false,
-                 sensorKind = sCount,
-                 posOverride = point(0,0,0)
-                ): GenericHittablesList =
+                 posOverride = point(0,0,0),
+                 ignoreWindow = false): GenericHittablesList =
   ## This is the correct offset for the focal spot position! It's the center of the cones for the telescope.
   ## XXX: Sanity check:
   ## -> Check all mirrors we install have the exact same position as an offset!!!
-  let imSensor = toMaterial(initImageSensor(pixelsW, pixelsH, kind = sensorKind))
+  ##
+  ## `ignoreWindow` is separate from `cfg` because we may wish to override it!
+  let imSensor = toMaterial(initImageSensor(pixelsW, pixelsH, kind = cfg.sensorKind))
   result.add toHittable(initBox(point(-sensorW/2, -sensorH/2, -sensorThickness/2),
                                 point( sensorW/2,  sensorH/2,  sensorThickness/2)),
                         imSensor)
   if not ignoreWindow:
-    result.add windowStrongback(windowRotation, windowZOffset)
+    result.add windowStrongback(cfg.windowRotation, cfg.windowZOffset)
   let target = if posOverride != point(0,0,0): posOverride
-               else: llnlFocalPoint(tel, magnet, rayAt, fullTelescope)
+               else: llnlFocalPoint(tel, magnet, cfg.rayAt, fullTelescope)
   result = result
-    .rotateZ(telescopeRotation)
+    .rotateZ(cfg.telescopeRotation)
     .translate(target)
 
 proc gridLines(tel: Telescope, magnet: Magnet): GenericHittablesList =
@@ -1135,10 +1194,7 @@ proc brokenMirror(c: Color): Material[RGBSpectrum] =
   # broken mirror simply uses a Lambertian to effectively disable reflections through the telescope
   result = toMaterial initLambertian(c)
 
-proc llnlTelescope(tel: Telescope, magnet: Magnet,
-                   energyMin, energyMax: float,
-                   fullTelescope, usePerfectMirror, brokenMirror, ignoreMirrorThickness: bool,
-                   mirrorThickness: float): GenericHittablesList =
+proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope: bool, cfg: Config): GenericHittablesList =
   ## Constructs the actual LLNL telescope
   ##
   ## Pos for the 'first' layers should be correct, under the following two conditions:
@@ -1203,7 +1259,7 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet,
   let
     lMirror = tel.lMirror
     xSep = tel.xSep
-  let reflectivity = setupReflectivity(energyMin, energyMax, NumSamples) ## `fluxCDF.nim`
+  let reflectivity = setupReflectivity(cfg.energyMin, cfg.energyMax, NumSamples) ## `fluxCDF.nim`
   let r1_0 = tel.allR1[0]
   for i in 0 ..< tel.allR1.len:
     let
@@ -1218,17 +1274,17 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet,
     # cone of the front (= towards magnet) shell
     template con1[S: SomeSpectrum](mat: Material[S]): untyped =
       setCone(r1, angle,     pos1, lMirror + xSep,
-              fullTelescope, ignoreMirrorThickness, mirrorThickness,
+              fullTelescope, cfg.ignoreMirrorThickness, cfg.mirrorThickness,
               tel, magnet, mat)
     # cone of the rear (= towards detector) shell
     template con2[S: SomeSpectrum](mat: Material[S]): untyped =
       ## NOTE: using `r1` as well reproduces the X-ray finger results from the _old_ raytracer!
       setCone(r4, 3 * angle, pos2, 0.0,
-              fullTelescope, ignoreMirrorThickness, mirrorThickness,
+              fullTelescope, cfg.ignoreMirrorThickness, cfg.mirrorThickness,
               tel, magnet, mat)
     ## Add mirrors with correct materials (different types!)
-    if not brokenMirror:
-      let mat = llnlLayerMaterial(i, reflectivity, usePerfectMirror, brokenMirror, color(1,0,0))
+    if not cfg.brokenMirrors:
+      let mat = llnlLayerMaterial(i, reflectivity, cfg.usePerfectMirror, cfg.brokenMirrors, color(1,0,0))
       result.add con1(mat)
       result.add con2(mat)
     else:
@@ -1256,24 +1312,7 @@ proc initSetup(fullTelescope: bool): (Telescope, Magnet) =
     let magnet = initMagnet(boreRadius, length)
     result = (llnl, magnet)
 
-proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
-               solarModelFile: string,
-               energyMin, energyMax: float,
-               rayAt = 1.0,
-               setupRotation = 90.0, # Angle the entire setup is rotated. This is the rotation to bring the downward pointing
-                                     # setup to the realistic sideways setup.
-               telescopeRotation = 14.17, # *Additional* rotation of the telescope on top of `setupRotation`.
-                                          # Separate to include real rotation aside from pointing the entire setup.
-               windowRotation = 30.0,
-               windowZOffset = 3.0,
-               ignoreWindow = false,
-               sensorKind = sCount,
-               brokenMirrors = false, # disables telescope mirror reflection for debugging
-               midTelescopeSensor = false,
-               ignoreMirrorThickness = false,
-               mirrorThickness = Inf, # adjust mirror thickenss. 0.2 by default
-               ignoreSpacer = false
-              ): GenericHittablesList =
+proc sceneLLNL(rnd: var Rand, cfg: Config): GenericHittablesList =
   ## Mirrors centered at lMirror/2.
   ## Entire telescope
   ##   lMirror  xsep  lMirror
@@ -1294,31 +1333,29 @@ proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, 
   var objs = initGenericHittables()
 
   objs.add earth()
-  objs.add lightSource(llnl, magnet, magnetPos, sourceKind, visibleTarget, solarModelFile)
-  objs.add magnetBore(magnet, magnetPos)
-  if gridLines:
+  objs.add lightSource(llnl, magnet, magnetPos, cfg)
+  if not cfg.ignoreMagnet:
+    objs.add magnetBore(magnet, magnetPos)
+  if cfg.gridLines:
     objs.add gridLines(llnl, magnet)
   var telescopeImSensor = initGenericHittables()
   # Add the image sensor and potentially window strongback
-  telescopeImSensor.add imageSensor(llnl, magnet, fullTelescope = false,
-                                    rayAt = rayAt, telescopeRotation = telescopeRotation,
-                                    sensorW = 14.0, sensorH = 14.0,
-                                    windowRotation = windowRotation,
-                                    windowZOffset = windowZOffset, ignoreWindow = ignoreWindow,
-                                    sensorKind = sensorKind)
-  if not ignoreSpacer:
+  telescopeImSensor.add imageSensor(llnl, magnet, fullTelescope = false, cfg = cfg,
+                                    pixelsW = 1000, pixelsH = 1000,
+                                    sensorW = 14.0, sensorH = 14.0, ignoreWindow = cfg.ignoreWindow)
+    .translate(vec3(0.1, 0.1, 0.0))
+  if not cfg.ignoreSpacer:
     telescopeImSensor.add graphiteSpacer(llnl, magnet, fullTelescope = false)
-  telescopeImSensor.add llnlTelescope(llnl, magnet,
-                                      energyMin, energyMax,
-                                      fullTelescope = false,
-                                      usePerfectMirror = usePerfectMirror, brokenMirror = brokenMirrors,
-                                      ignoreMirrorThickness = ignoreMirrorThickness,
-                                      mirrorThickness = mirrorThickness)
+  telescopeImSensor.add llnlTelescope(llnl, magnet, fullTelescope = false, cfg = cfg)
   objs.add telescopeImSensor
-    .rotateZ(setupRotation - telescopeRotation)
+    .rotateZ(cfg.setupRotation - cfg.telescopeRotation)
 
-  if midTelescopeSensor: # sensor placed between both telescope mirror sets. Useful to debug image after set 1
-    objs.add imageSensor(llnl, magnet, fullTelescope = false,
+  if cfg.midTelescopeSensor: # sensor placed between both telescope mirror sets. Useful to debug image after set 1
+    objs.add imageSensor(llnl, magnet, fullTelescope = false, cfg = cfg,
+                         pixelsW = 1000, pixelsH = 1000,
+                         sensorW = magnet.radius * 2, sensorH = magnet.radius * 2,
+                         posOverride = point(0.0, 0.0, llnl.lMirror + 2.0),
+                         ignoreWindow = true)
                          pixelsW = 1000, pixelsH = 1000,
                          sensorW = magnet.radius * 2, sensorH = magnet.radius * 2,
                          ignoreWindow = true,
@@ -1329,15 +1366,7 @@ proc sceneLLNL(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, 
   #result.add telescope #rnd.initBvhNode(telescope)
   result.add objs
 
-proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
-                    solarModelFile: string,
-                    energyMin, energyMax: float,
-                    brokenMirrors = false, # disables telescope mirror reflection for debugging
-                    midTelescopeSensor = false,
-                    ignoreMirrorThickness = false,
-                    mirrorThickness = Inf, # adjust mirror thickenss. 0.2 by default
-                    ignoreSpacer = false
-                   ): GenericHittablesList =
+proc sceneLLNLTwice(rnd: var Rand, cfg: Config): GenericHittablesList =
   ## Mirrors centered at lMirror/2.
   ## Entire telescope
   ##   lMirror  xsep  lMirror
@@ -1358,26 +1387,21 @@ proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: b
   var objs = initGenericHittables()
 
   objs.add earth()
-  if gridLines:
+  if cfg.gridLines:
     objs.add gridLines(llnl, magnet)
-  objs.add imageSensor(llnl, magnet, fullTelescope = true) ## Don't want y displacement, the two bores are rotated by 90°
+  objs.add imageSensor(llnl, magnet, fullTelescope = true, cfg = cfg) ## Don't want y displacement, the two bores are rotated by 90°
                                                            ## so focal spot is on y = 0
   var telMag = initGenericHittables()
-  case sourceKind
-  of skSun: objs.add sun(solarModelFile) ## Only a single sun in center x/y! Hence add to `objs` so not duplicated
+  case cfg.sourceKind
+  of skSun: objs.add sun(cfg.solarModelFile) ## Only a single sun in center x/y! Hence add to `objs` so not duplicated
   of skXrayFinger, skParallelXrayFinger:
-    telMag.add xrayFinger(llnl, magnet, magnetPos, sourceKind)
+    telMag.add xrayFinger(llnl, magnet, magnetPos, cfg)
   # Need two targets in both source cases
-  telMag.add target(llnl, magnet, visibleTarget)
+  telMag.add target(llnl, magnet, cfg.visibleTarget)
   telMag.add magnetBore(magnet, magnetPos)
-  if not ignoreSpacer:
+  if not cfg.ignoreSpacer:
     telMag.add graphiteSpacer(llnl, magnet, fullTelescope = false)
-  telMag.add llnlTelescope(llnl, magnet,
-                           energyMin, energyMax,
-                           fullTelescope = false,
-                           usePerfectMirror = usePerfectMirror, brokenMirror = brokenMirrors,
-                           ignoreMirrorThickness = ignoreMirrorThickness,
-                           mirrorThickness = mirrorThickness)
+  telMag.add llnlTelescope(llnl, magnet, fullTelescope = false, cfg = cfg)
 
   ## XXX: FIX THE -83!
   objs.add telMag.rotateZ(-90.0)
@@ -1388,16 +1412,7 @@ proc sceneLLNLTwice(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: b
   #result.add telescope #rnd.initBvhNode(telescope)
   result.add objs
 
-proc sceneLLNLFullTelescope(rnd: var Rand, visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
-                            solarModelFile: string,
-                            energyMin, energyMax: float,
-                            rayAt = 1.0,
-                            brokenMirrors = false, # disables telescope mirror reflection for debugging
-                            midTelescopeSensor = false,
-                            ignoreMirrorThickness = false,
-                            mirrorThickness = Inf, # adjust mirror thickenss. 0.2 by default
-                            ignoreSpacer = false
-                           ): GenericHittablesList =
+proc sceneLLNLFullTelescope(rnd: var Rand, cfg: Config): GenericHittablesList =
   ## Mirrors centered at lMirror/2.
   ## Entire telescope
   ##   lMirror  xsep  lMirror
@@ -1417,21 +1432,16 @@ proc sceneLLNLFullTelescope(rnd: var Rand, visibleTarget, gridLines, usePerfectM
 
   var objs = initGenericHittables()
   objs.add earth()
-  objs.add lightSource(llnl, magnet, magnetPos, sourceKind, visibleTarget, solarModelFile)
+  objs.add lightSource(llnl, magnet, magnetPos, cfg)
   objs.add magnetBore(magnet, magnetPos)
-  if gridLines:
+  if cfg.gridLines:
     objs.add gridLines(llnl, magnet)
-  objs.add imageSensor(llnl, magnet, fullTelescope = true, rayAt = rayAt)
+  objs.add imageSensor(llnl, magnet, fullTelescope = true, cfg = cfg)
 
   var telescope = initGenericHittables()
-  if not ignoreSpacer:
+  if not cfg.ignoreSpacer:
     telescope.add graphiteSpacer(llnl, magnet, fullTelescope = true)
-  telescope.add llnlTelescope(llnl, magnet,
-                              energyMin, energyMax,
-                              fullTelescope = true,
-                              usePerfectMirror = usePerfectMirror, brokenMirror = brokenMirrors,
-                              ignoreMirrorThickness = ignoreMirrorThickness,
-                              mirrorThickness = mirrorThickness)
+  telescope.add llnlTelescope(llnl, magnet, fullTelescope = true, cfg = cfg)
   objs.add telescope
   ## XXX: BVH node of the telescope is currently broken! Bad shading.
   #result.add telescope #rnd.initBvhNode(telescope)
@@ -1466,18 +1476,21 @@ proc main(width = 600,
           rayAt = 1.0,
           setupRotation = 90.0,
           telescopeRotation = 14.17,
-          windowRotation = 30.0,
+          windowRotation = -30.0,
           windowZOffset = 3.0,
           ignoreWindow = false,
           sensorKind = sCount,
           brokenMirrors = false, # disables telescope mirror reflection for debugging
           midTelescopeSensor = false,
+          endTelescopeSensor = false,
           ignoreMirrorThickness = false,
           mirrorThickness = Inf, # adjust mirror thickenss. 0.2 by default
           ignoreSpacer = false,
           energyMin = 0.0, # keV
           energyMax = 15.0, # keV
-          energy = Inf # If given produce only signals at *this* energy. Overrides min / max
+          energy = Inf, # If given produce only signals at *this* energy. Overrides min / max
+          sourceDistance = 14.2.m,
+          sourceRadius = 3.0.mm
          ) =
   # Image
   THREADS = nJobs
@@ -1490,6 +1503,18 @@ proc main(width = 600,
 
   # determine the correct energy ranges
   let (energyMin, energyMax) = calcEnergyRange(energyMin, energyMax, energy)
+
+  let cfg = initConfig(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile,
+                       energyMin, energyMax,
+                       rayAt,
+                       setupRotation, telescopeRotation, windowRotation, windowZOffset, ignoreWindow,
+                       sensorKind,
+                       brokenMirrors, # disables telescope mirror reflection for debugging
+                       midTelescopeSensor, endTelescopeSensor,
+                       ignoreMirrorThickness,
+                       mirrorThickness,# adjust mirror thickenss. 0.2 by default
+                       ignoreSpacer,
+                       sourceDistance, sourceRadius)
   # World
   ## Looking at mirrors!
   var lookFrom: Point = point(1,1,1)
@@ -1515,36 +1540,12 @@ proc main(width = 600,
       lookFrom = point(-42.12957189166389, -77.3883974697615, -1252.584896902418)
 
     if fullTelescope:
-      world = rnd.sceneLLNLFullTelescope(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile,
-                                         energyMin, energyMax,
-                                         rayAt,
-                                         brokenMirrors, # disables telescope mirror reflection for debugging
-                                         midTelescopeSensor,
-                                         ignoreMirrorThickness,
-                                         mirrorThickness, # adjust mirror thickenss. 0.2 by default
-                                         ignoreSpacer)
-
+      world = rnd.sceneLLNLFullTelescope(cfg)
     elif llnlTwice:
-      world = rnd.sceneLLNLTwice(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile,
-                                 energyMin, energyMax,
-                                 brokenMirrors, # disables telescope mirror reflection for debugging
-                                 midTelescopeSensor,
-                                 ignoreMirrorThickness,
-                                 mirrorThickness, # adjust mirror thickenss. 0.2 by default
-                                 ignoreSpacer)
-
+      world = rnd.sceneLLNLTwice(cfg)
     else:
       echo "Visible target? ", visibleTarget
-      world = rnd.sceneLLNL(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile,
-                            energyMin, energyMax,
-                            rayAt,
-                            setupRotation, telescopeRotation, windowRotation, windowZOffset, ignoreWindow,
-                            sensorKind,
-                            brokenMirrors, # disables telescope mirror reflection for debugging
-                            midTelescopeSensor,
-                            ignoreMirrorThickness,
-                            mirrorThickness,# adjust mirror thickenss. 0.2 by default
-                            ignoreSpacer)
+      world = rnd.sceneLLNL(cfg)
 
   elif spheres:
     world = rnd.randomScene(useBvh = false) ## Currently BVH broken
@@ -1581,4 +1582,5 @@ proc main(width = 600,
 
 when isMainModule:
   import cligen
+  import unchained / cligenParseUnits
   dispatch main
