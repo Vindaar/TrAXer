@@ -267,7 +267,11 @@ proc scatter*[S: SomeSpectrum](
   let toReflect = true ## rnd.rand(1.0) <= refl
   if toReflect:
     var reflected = r_inUnit.reflect(rec.normal)
-    scattered = initRay(rec.p, reflected + m.fuzz * rnd.randomInUnitSphere(), r_in.typ)
+    ## XXX: implement `fuzz` not as random in unit sphere, but random in normal distribution!
+    if m.fuzz > 0.0: # no need to random sample if `fuzz` not used
+      scattered = initRay(rec.p, reflected + m.fuzz * rnd.randomInNormalDist(), r_in.typ)
+    else:
+      scattered = initRay(rec.p, reflected, r_in.typ)
     result = scattered.dir.dot(rec.normal) > 0
   else:
     ## add transmission code taking into account refractive indices (which are energy dependent!)
