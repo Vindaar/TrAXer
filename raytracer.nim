@@ -1502,7 +1502,7 @@ proc main(width = 600,
     elif focalPoint:
       let (llnl, magnet) = initSetup(fullTelescope)
       let ray = llnlFocalPointRay(llnl, magnet, fullTelescope)
-      (lookFrom, lookAt) = (ray.at(rayAt), ray.at(0.0))
+      (lookFrom, lookAt) = (ray.at(rayAt).rotateZ(-(setupRotation - telescopeRotation)), ray.at(0.0))
     else:
       #lookFrom = point(172.2886370206074, 58.69754358408407, -14.3630844062124) #point(-0.5, 3, -0.5)#point(3,3,2)
       #lookAt = point(171.4358852563132, 58.70226619735943, -13.84078935031287) #point(0, 1.5, 2.5)#point(0,0,-1)
