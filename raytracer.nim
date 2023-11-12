@@ -150,7 +150,9 @@ proc initRenderContexts(numThreads: int,
 
 when compileOption("threads"):
   import malebolgia
-var THREADS = 16
+  let THREADS = ThreadPoolSize
+else:
+  let THREADS = 1
 
 proc rayColor*[S: SomeSpectrum](c: Camera, rnd: var Rand, r: Ray, world: HittablesList[S], depth: int): S {.gcsafe.} =
   var rec: HitRecord[S]
@@ -1547,7 +1549,7 @@ proc main(width = 600,
           sourceOnOpticalAxis = false,
          ) =
   # Image
-  THREADS = nJobs
+  #THREADS = nJobs
   #const ratio = 16.0 / 9.0 #16.0 / 9.0
   const ratio = 1.0
   ## XXX: It's about time for a `Config` or `Context` object to store all the parameters...
