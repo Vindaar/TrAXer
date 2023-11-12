@@ -162,7 +162,11 @@ proc calculateReflectivity[T; B; S](recipe: DepthGradedMultilayer[T, B, S],
 ## Move this to another file?
 import basetypes
 ## XXX: cacheme currently not working, due to compiler bug about static array type from `copyflat`
-# import cacheme
+## -> This has been fixed. But currently the code still does not quite work!
+## In any case it's probably a good idea to serialize the `Table` explicitly in `nimhdf5`. The current
+## serialization format with that level of compound nestedness is not really helpful.
+## -> We have since implemented a `serialize_tables` submodule in `nimhdf5` that we could try now.
+#import cacheme
 type
   Reflectivity* = object
     layers*: seq[int]
@@ -173,7 +177,7 @@ proc setupReflectivity*(energyMin, energyMax: float,
                                          # to only compute as many samples as really needed!
                         angleMin = 0.0, angleMax = 15.0,
                         numAngle = 1000
-                       ): Reflectivity = #  {.cacheMe: "resources/reflectivity_cache".} =
+                       ): Reflectivity = # {.cacheMe: "resources/reflectivity_cache".} =
   let angleMin = angleMin.°
   let angleMax = angleMax.°
   let energyMin = energyMin.keV
