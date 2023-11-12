@@ -995,7 +995,7 @@ proc lightSource(tel: Telescope, magnet: Magnet, magnetPos: float, cfg: Config):
     result.add target(tel, magnet, cfg.visibleTarget)
 
 proc magnetBore(magnet: Magnet, magnetPos: float): Hittable[RGBSpectrum] =
-  let cylMetal = initMaterial(initMetal(color(0.2, 0.2, 0.6), 0.8))
+  let cylMetal = initMaterial(initMetal(color(0.2, 0.2, 0.6), 0.2))
   # The bore is a full cylinder made of metal, slight blue tint
   result = toHittable(Cylinder(radius: magnet.radius, zMin: 0.0, zMax: magnet.length, phiMax: 360.0.degToRad), cylMetal)
     .translate(vec3(0.0, 0.0, magnetPos))
