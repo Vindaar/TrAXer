@@ -1000,7 +1000,7 @@ proc magnetBore(magnet: Magnet, magnetPos: float): Hittable[RGBSpectrum] =
   result = toHittable(Cylinder(radius: magnet.radius, zMin: 0.0, zMax: magnet.length, phiMax: 360.0.degToRad), cylMetal)
     .translate(vec3(0.0, 0.0, magnetPos))
 
-proc windowStrongback(windowRotation, windowZOffset: float): GenericHittablesList =
+proc windowStrongback(windowRotation: Degree, windowZOffset: float): GenericHittablesList =
   ## Implements the window strongback of the Si₃N₄ window used at CAST for the Septemboard detector.
   const
     distance = 2.3 #mm Distance between strips, edge to edge!
