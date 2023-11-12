@@ -63,13 +63,18 @@ type
     # targets
     visibleTarget: bool
     targetRadius: MilliMeter = 0.mm
+    # misc
+    batchMode: bool = false
+    totalRays: int = 1_000_000 # number of rays for batch mode
+    shmOutfile: string = "/dev/shm/image_sensor.dat" ## The output file where to store the temp image senso data
+    bufOutdir: string = "out" ## directory where buffer binaries are stored
 
 var Tracing = ttCamera
 
 proc initConfig(visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
                 solarModelFile: string,
                 energyMin, energyMax: float,
-                rayAt, setupRotation, telescopeRotation, windowRotation, windowZOffset: float,
+                rayAt: float, setupRotation, telescopeRotation, windowRotation: Degree, windowZOffset: float,
                 ignoreWindow: bool,
                 sensorKind: SensorKind,
                 brokenMirrors: bool,
@@ -77,9 +82,13 @@ proc initConfig(visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: So
                 ignoreMirrorThickness: bool,
                 mirrorThickness: float,
                 ignoreSpacer: bool,
+                ignoreMagnet: bool,
                 sourceDistance: Meter, sourceRadius: MilliMeter,
                 sourceOnOpticalAxis: bool,
                 targetRadius: MilliMeter,
+                batchMode: bool, totalRays: int,
+                shmOutfile: string,
+                bufOutdir: string
                ): Config =
   result = Config(visibleTarget: visibleTarget,
                   gridLines: gridLines,
@@ -101,10 +110,14 @@ proc initConfig(visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: So
                   ignoreMirrorThickness: ignoreMirrorThickness,
                   mirrorThickness: mirrorThickness,
                   ignoreSpacer: ignoreSpacer,
+                  ignoreMagnet: ignoreMagnet,
                   sourceDistance: sourceDistance,
                   sourceRadius: sourceRadius,
                   sourceOnOpticalAxis: sourceOnOpticalAxis,
                   targetRadius: targetRadius,
+                  batchMode: batchMode, totalRays: totalRays,
+                  shmOutfile: shmOutfile,
+                  bufOutdir: bufOutdir)
 
 proc initRenderContext(rnd: var Rand,
                        buf: ptr UncheckedArray[uint32], counts: ptr UncheckedArray[int],
@@ -495,6 +508,18 @@ proc renderFrame(j: int, ctx: ptr RenderContext) {.gcsafe.} =
     ctx.buf[idx.int - frm] = sdlColor
     inc j
 
+proc renderBatchFrame(ctx: ptr RenderContext) {.gcsafe.} =
+  ## Render only X-ray raytracer in batch mode
+  let ctx = ctx[]
+  let
+    maxDepth = ctx.maxDepth
+    camera = ctx.camera
+  doAssert ctx.sources.len > 0
+  for j in 0 ..< ctx.numRays:
+    let (r, spectrum) = ctx.rnd.sampleRay(ctx.sources, ctx.targets)
+    # 2. trace it
+    let c = camera.rayColorRecurse(ctx.rnd, r, ctx.worldXray, maxDepth, spectrum)
+
 proc copyBuf(bufT: Tensor[uint32], window: SurfacePtr) =
   var surf = fromBuffer[uint32](window.pixels, @[window.h.int, window.w.int])
   if surf.shape == bufT.shape:
@@ -510,23 +535,56 @@ proc updateCamera(ctxs: var seq[RenderContext], camera: Camera) =
   for ctx in mitems(ctxs):
     ctx.camera = clone(camera)
 
-proc writeData[T](p: ptr UncheckedArray[T], len, width, height: int, outpath, prefix: string) =
+proc writeData[T](p: ptr UncheckedArray[T], len, width, height: int, outpath, prefix: string): string =
   ## XXX: TODO use `nio`?
-  let filename = &"{outpath}/{prefix}_type_{$T}_len_{len}_width_{width}_height_{height}.dat"
-  echo "[INFO] Writing file: ", filename
-  writeFile(filename, toOpenArray(cast[ptr UncheckedArray[byte]](p), 0, len * sizeof(T)))
+  result = &"{outpath}/{prefix}_type_{$T}_len_{len}_width_{width}_height_{height}.dat"
+  echo "[INFO] Writing file: ", result
+  writeFile(result, toOpenArray(cast[ptr UncheckedArray[byte]](p), 0, len * sizeof(T)))
 
 from std / times import now, `$`
 
 import ggplotnim except Point, Color, colortypes, color
 
+proc saveBuffers(bufT: Tensor[uint32], counts: Tensor[int], width, height: int,
+                 world: GenericHittablesList,
+                 bufOutdir: string,
+                 shmOutfile: string = "/dev/shm/image_sensor.dat",
+                 isBatch: bool = false) =
+  echo "[INFO] Writing buffers to binary files."
+  createDir(bufOutdir)
+  let tStr = $now()
+  if not isBatch:
+    let bufP = cast[ptr UncheckedArray[uint32]](bufT.unsafe_raw_offset())
+    discard bufP.writeData(bufT.size.int, width, height,
+                           bufOutdir, &"buffer_{tStr}")
+    let countsP = cast[ptr UncheckedArray[int]](counts.unsafe_raw_offset())
+    discard countsP.writeData(counts.size.int, width, height,
+                              bufOutdir, &"counts_{tStr}")
+  # now get all image sensors and write their data
+  let sensors = world.getImageSensors()
+  var idx = 0
+  for s in sensors:
+    let sm = s.getMaterial.mImageSensor.sensor
+    var prefix = &"image_sensor_{idx}_{tStr}_"
+    case s.kind
+    of htBox:
+      let physSize = s.hBox.boxMax - s.hBox.boxMin
+      prefix.add &"_dx_{physSize.x:.1f}_dy_{physSize.y:.1f}_dz_{physSize.z:.1f}"
+    else: discard
+    let fname = sm.buf.writeData(sm.len, sm.width, sm.height,
+                                 bufOutdir, prefix)
+    # copy last buffer to `/dev/shm/image_sensor.dat` for batch processing
+    copyFile(fname, shmOutfile)
+    inc idx
 
 proc renderSdl*(img: Image, world: GenericHittablesList,
                 rnd: var Rand, # the *main thread* RNG
                 camera: Camera,
                 samplesPerPixel, maxDepth: int,
                 speed = 1.0, speedMul = 1.1,
-                numRays = 100
+                numRays = 100,
+                batchMode = false, totalRays = 1_000_000,
+                bufOutdir = "out"
                ) =
   discard sdl2.init(INIT_EVERYTHING)
   var screen = sdl2.createWindow("Ray tracing".cstring,
@@ -537,6 +595,8 @@ proc renderSdl*(img: Image, world: GenericHittablesList,
   var renderer = sdl2.createRenderer(screen, -1, 1)
   if screen.isNil:
     quit($sdl2.getError())
+
+  var current = 0
 
   var mouseModeIsRelative = false
   var mouseEnabled = false
@@ -660,30 +720,7 @@ proc renderSdl*(img: Image, world: GenericHittablesList,
             echo "[INFO] Mouse disabled."
         of SDL_SCANCODE_F5:
           ## Save the current data on the image sensor as well as the current camera buffer and counts buffer
-          echo "[INFO] Writing buffers to binary files."
-          const path = "out"
-          createDir(path)
-          let bufP = cast[ptr UncheckedArray[uint32]](bufT.unsafe_raw_offset())
-          let tStr = $now()
-          bufP.writeData(bufT.size.int, width, height,
-                         path, &"buffer_{tStr}")
-          let countsP = cast[ptr UncheckedArray[int]](counts.unsafe_raw_offset())
-          countsP.writeData(counts.size.int, width, height,
-                           path, &"counts_{tStr}")
-          # now get all image sensors and write their data
-          let sensors = world.getImageSensors()
-          var idx = 0
-          for s in sensors:
-            let sm = s.getMaterial.mImageSensor.sensor
-            var prefix = &"image_sensor_{idx}_{tStr}_"
-            case s.kind
-            of htBox:
-              let physSize = s.hBox.boxMax - s.hBox.boxMin
-              prefix.add &"_dx_{physSize.x:.1f}_dy_{physSize.y:.1f}_dz_{physSize.z:.1f}"
-            else: discard
-            sm.buf.writeData(sm.len, sm.width, sm.height,
-                             path, prefix)
-            inc idx
+          saveBuffers(bufT, counts, width, height, world, bufOutdir = bufOutdir)
         else: discard
       of MousebuttonDown:
         ## activate relative mouse motion
@@ -740,7 +777,47 @@ proc renderSdl*(img: Image, world: GenericHittablesList,
     unlockSurface(window)
     #sdl2.clear(arg.renderer)
     sdl2.present(renderer)
+
+    if batchMode:
+      if numRays * current * ThreadPoolSize > totalRays:
+        # save all buffers
+        saveBuffers(bufT, counts, width, height, world, bufOutdir = bufOutdir)
+        # and stop
+        break
+      inc current
+
   sdl2.quit()
+
+proc renderBatch*(img: Image, world: GenericHittablesList,
+                  rnd: var Rand, # the *main thread* RNG
+                  camera: Camera,
+                  maxDepth: int,
+                  shmOutfile: string,
+                  bufOutdir: string,
+                  totalRays = 1_000_000
+               ) =
+  # store original position from and to we look to reset using `backspace`
+  let width = img.width
+  let height = img.height
+
+  var bufT = zeros[uint32](@[img.height, img.width]) # dummy, we don't save them
+  var counts = zeros[int](@[img.height, img.width])
+
+  let raysPerThread = totalRays div THREADS
+  when compileOption("threads"): # pass SurfacePtr as `nil`. We don't need it here
+    var ctxSeq = initRenderContexts(THREADS,
+                                    bufT, counts, nil, raysPerThread, width, height, camera, world, maxDepth)
+
+  else:
+    let ctx = initRenderContext(rnd, bufT, counts, nil, raysPerThread, width, height, camera, world, maxDepth)
+
+  var m = createMaster()
+  m.awaitAll:
+    for j in 0 ..< THREADS:
+      m.spawn renderBatchFrame(ctxSeq[j].addr)
+  # save all buffers
+  saveBuffers(bufT, counts, width, height, world, shmOutfile = shmOutfile, bufOutdir = bufOutdir, isBatch = true)
+  # and stop
 
 proc sceneRedBlue(): GenericHittablesList =
   result = initGenericHittables()
@@ -1565,13 +1642,18 @@ proc main(width = 600,
           ignoreMirrorThickness = false,
           mirrorThickness = Inf, # adjust mirror thickenss. 0.2 by default
           ignoreSpacer = false,
+          ignoreMagnet = false,
           energyMin = 0.0, # keV
           energyMax = 15.0, # keV
           energy = Inf, # If given produce only signals at *this* energy. Overrides min / max
           sourceDistance = 14.2.m,
-          sourceRadius = 3.0.mm
+          sourceRadius = 3.0.mm,
           sourceOnOpticalAxis = false,
           targetRadius = 0.mm,
+          batchMode = false,
+          totalRays = 1_000_000,
+          shmOutfile = "/dev/shm/image_sensor.dat",
+          bufOutdir = "out"
          ) =
   # Image
   #THREADS = nJobs
@@ -1595,9 +1677,13 @@ proc main(width = 600,
                        ignoreMirrorThickness,
                        mirrorThickness,# adjust mirror thickenss. 0.2 by default
                        ignoreSpacer,
+                       ignoreMagnet,
                        sourceDistance, sourceRadius,
                        sourceOnOpticalAxis,
                        targetRadius,
+                       batchMode, totalRays,
+                       shmOutfile,
+                       bufOutdir)
   # World
   ## Looking at mirrors!
   var lookFrom: Point = point(1,1,1)
@@ -1650,7 +1736,7 @@ proc main(width = 600,
                           width = width,
                           defocusAngle = defocusAngle,
                           focusDist = distToFocus,
-                          #background = color(0,0,0))# color(0.5, 0.7, 1.0)) # default background
+                          #background = color(0,0,0))
                           background = color(0.5, 0.7, 1.0)) # default background
 
   # Rand seed
@@ -1659,9 +1745,19 @@ proc main(width = 600,
   # Render (image)
   let fname = &"/tmp/render_width_{width}_samplesPerPixel_{samplesPerPixel}.ppm"
   #img.renderMC(fname, world, camera, samplesPerPixel, maxDepth)
-  img.renderSdl(world, rnd, camera, samplesPerPixel, maxDepth,
-                speed = speed, speedMul = speedMul,
-                numRays = numRays)
+  if not batchMode:
+    img.renderSdl(world, rnd, camera, samplesPerPixel, maxDepth,
+                  speed = speed, speedMul = speedMul,
+                  numRays = numRays,
+                  batchMode = cfg.batchMode,
+                  totalRays = cfg.totalRays,
+                  bufOutdir = cfg.bufOutdir)
+  else:
+    img.renderBatch(world, rnd, camera,
+                    maxDepth,
+                    shmOutfile = cfg.shmOutfile,
+                    bufOutdir = cfg.bufOutdir,
+                    totalRays = cfg.totalRays)
 
 when isMainModule:
   import cligen
