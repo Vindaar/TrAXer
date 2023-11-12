@@ -39,11 +39,11 @@ type
     energyMin: float
     energyMax: float
     rayAt = 1.0
-    setupRotation = 90.0 # Angle the entire setup is rotated. This is the rotation to bring the downward pointing
+    setupRotation = 90.0.° # Angle the entire setup is rotated. This is the rotation to bring the downward pointing
                           # setup to the realistic sideways setup.
-    telescopeRotation = 14.17 # *Additional* rotation of the telescope on top of `setupRotation`.
+    telescopeRotation = 14.17.° # *Additional* rotation of the telescope on top of `setupRotation`.
                                # Separate to include real rotation aside from pointing the entire setup.
-    windowRotation = 30.0
+    windowRotation = 30.0.°
     windowZOffset = 3.0
     ignoreWindow = false
     ignoreMagnet = true ## Whether to include the magnet
@@ -866,12 +866,12 @@ proc sceneTest(rnd: var Rand): GenericHittablesList =
       translate(
         initBox(point(0, 0, 0), point(1, 1.75, 5.5), matBox),
         center),
-      0.0)
+      0.0.°)
     let telBox2 = rotateX(
       translate(
         initBox(point(0, 0, 0), point(1, 1.75, 5.5), matBox),
         center),
-      -50.0)
+      -50.0.°)
     result.add telBox1
     result.add telBox2
   elif false:
@@ -880,12 +880,12 @@ proc sceneTest(rnd: var Rand): GenericHittablesList =
       translate(
         initBox(point(0, 0, 0), point(1, 1, 1), matBox),
         center),
-      0.0)
+      0.0.°)
     let telBox2 = rotateZ(
       translate(
         initBox(point(0, 0, 0), point(1, 1, 1), matBox),
         center),
-      -50.0)
+      -50.0.°)
     result.add telBox1
     result.add telBox2
 
@@ -898,7 +898,7 @@ proc sceneTest(rnd: var Rand): GenericHittablesList =
       translate(
         cyl,
         center),
-      90.0)
+      90.0.°)
   result.add h
 
   #
@@ -913,9 +913,9 @@ proc sceneTest(rnd: var Rand): GenericHittablesList =
   #result.add ball0
   #result.add ball2
 
-proc calcHeight(radius, angle: float): float =
+proc calcHeight(radius: float, angle: Radian): float =
   ## Computes the total height of a cone with `angle` and opening `radius`.
-  result = radius / tan(angle.degToRad)
+  result = radius / tan(angle)
 
 from sequtils import mapIt
 from std/stats import mean
@@ -1023,10 +1023,10 @@ proc llnlFocalPointRay(tel: Telescope, magnet: Magnet, fullTelescope: bool): Ray
   ## other than `1` via `at` yields a point along the "focal line" - a point centered
   ## on the (possibly unfocused) image.
   let
-    #r1_0 = tel.allR1.mean # [0]
-    #α0 = tel.allAngles.mean.degToRad # [0].degToRad
     r1_0 = tel.allR1[0]
-    α0 = tel.allAngles[0].degToRad
+    α0 = tel.calcAngle(0)
+    αMean = tel.meanAngle()
+
     lMirror = tel.lMirror
     xSep = tel.xSep
     telCenter = lMirror + xSep / 2 # focal point defined from ``center`` of telescope!
@@ -1100,7 +1100,7 @@ proc imageSensor(tel: Telescope, magnet: Magnet,
   ## exit instead of straight towards `dir = (0, 0, 1)`.
   let targetRay = llnlFocalPointRay(tel, magnet, fullTelescope = false)
   let zRay = initRay(target, vec3(0.0, 0.0, 1.0), rtCamera)
-  let angle = arccos( abs dot(targetRay.dir.normalize, zRay.dir.normalize) ).radToDeg
+  let angle = arccos( abs dot(targetRay.dir.normalize, zRay.dir.normalize) ).Radian.to(Degree)
   result = result
     .rotateX(angle)
     .rotateZ(cfg.telescopeRotation)
@@ -1120,14 +1120,14 @@ proc gridLines(tel: Telescope, magnet: Magnet): GenericHittablesList =
   let z0 = tel.lMirror + tel.xSep + tel.lMirror / 2
   let xLine = toHittable(Cylinder(radius: 0.5, zMin: -100.0, zMax: 100, phiMax: 360.0.degToRad), cylMetal)
     .translate(vec3(0.0, -magnet.radius, 0.0))
-    .rotateY(90.0)
+    .rotateY(90.0.°)
     .translate(vec3(0.0, 0.0, z0))
   result.add xLine
 
   let z1 = lMirror / 2
   let xLine2 = toHittable(Cylinder(radius: 0.5, zMin: -100.0, zMax: 100, phiMax: 360.0.degToRad), cylMetal)
     .translate(vec3(0.0, -magnet.radius, 0.0))
-    .rotateY(90.0)
+    .rotateY(90.0.°)
     .translate(vec3(0.0, 0.0, z1))
   result.add xLine2
 
@@ -1138,16 +1138,16 @@ proc gridLines(tel: Telescope, magnet: Magnet): GenericHittablesList =
                                    point( magnet.radius * 1.2,  magnet.radius * 1.2, 0.0)),
                         screen)
   let yLine0 = yScreen#toHittable(Cylinder(radius: 0.1, zMin: -100.0, zMax: 100, phiMax: 360.0.degToRad), cylMetal)
-    .rotateZ(90.0) # rotate so that it stands up
+    .rotateZ(90.0.°) # rotate so that it stands up
   result.add yLine0
   let yLine1 = yLine0.translate(vec3(0.0, 0.0, tel.lMirror)) # forward to its position
   result.add yLine1
 
 
-proc calcYlYsep(angle, xSep, lMirror: float): (float, float, float) =
+proc calcYlYsep(angle: Degree, xSep, lMirror: float): (float, float, float) =
   ## Helper to compute displacement of each set of mirrors and the y distance
   ## given by the angles due to mirror rotation
-  let α = angle.degToRad
+  let α = angle.to(Radian)
   let ySep = tan(α) * (xSep / 2.0) + tan(3 * α) * (xSep / 2.0)
   let yL1  = sin(α) * lMirror
   let yL2  = sin(3 * α) * lMirror
@@ -1161,9 +1161,9 @@ proc graphiteSpacer(tel: Telescope, magnet: Magnet, fullTelescope: bool): Generi
     xSep = tel.xSep
     graphite = initMaterial(initLambertian(color(0.2, 0.2, 0.2)))
     excessSize = 5.0
-    α0 = tel.allAngles[0]
+    α0 = tel.calcAngle(0)
     (ySep, yL1, yL2) = calcYlYsep(α0, xSep, lMirror)
-    meanAngle = tel.allAngles.mean
+    meanAngle = tel.meanAngle()
   let gSpacer = toHittable(initBox(point(0, 0, 0), point(2, 2 * magnet.radius + excessSize, lMirror)), graphite)
     .translate(vec3(-1.0, -magnet.radius - excessSize / 2, -lMirror / 2))
   let gSpacer1 = gSpacer
@@ -1180,18 +1180,18 @@ proc graphiteSpacer(tel: Telescope, magnet: Magnet, fullTelescope: bool): Generi
     #let centerDisk = XyRect(x0: -boreRadius, x1: boreRadius, y0: -boreRadius, y1: boreRadius), imSensorDisk)  #Disk(distance: 0.0, radius: 500.0), imSensorDisk)
     #let centerDisk = initBox(point(-magnet.radius, -magnet.radius, -0.1), point(magnet.radius, magnet.radius, 0.1), imSensorDisk)
     ## A disk that blocks the inner part where no mirrors cover the bore.
-    let centerDisk = toHittable(Disk(distance: 0.0, radius: tel.allR1[0] - sin(tel.allAngles[0].degToRad) * tel.lMirror),
+    let centerDisk = toHittable(Disk(distance: 0.0, radius: tel.allR1[0] - sin(α0.to(Radian)) * tel.lMirror),
                                 graphite)
       .translate(vec3(0.0, 0.0, lMirror * 2 + xSep))
     result.add centerDisk
 
-proc sanityTelescopeOutput(i: int, r1, r5, pos, pos2, angle, lMirror, xSep, yL1, yL2, ySep, boreRadius: float) =
+proc sanityTelescopeOutput(i: int, r1, r5, pos, pos2: float, angle: Degree, lMirror, xSep, yL1, yL2, ySep, boreRadius: float) =
   ## XXX: clean this up and make more useful!
   echo "r1 = ", r1, " r5 = ", r5, " r5 - r1 = ", r5 - r1, " i = ", i, " pos = ", pos, " pos2 = ", pos2
   block Sanity:
-    let yCenter = tan(2 * angle.degToRad) * (lMirror + xsep)
+    let yCenter = tan(2 * angle.to(Radian)) * (lMirror + xsep)
     echo "yCenter value = ", yCenter, " compare to 'working' ", - (yL2) - (yL1) - ySep, " compare 'correct' = ", - (yL2/2) - (yL1/2) - ySep
-    let yOffset = (r1 - (sin(angle.degToRad) * lMirror) / 2.0) + boreRadius - pos
+    let yOffset = (r1 - (sin(angle.to(Radian)) * lMirror) / 2.0) + boreRadius - pos
     echo "Offset for layer ", i, " should be: ", yOffset, " \n==============================\n\n"
 
 from std/algorithm import lowerBound
@@ -1230,35 +1230,35 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope: bool, cfg: Con
     ## Important: the `zMax` of a cone is literally its maximum height along the `z` axis. This means
     ## it is _not_ lMirror!
     result = toHittable(Cone(radius: r, height: h, zMax: zMax,
-                             phiMax: tel.mirrorSize.degToRad),
+                             phiMax: tel.mirrorSize.to(Radian)),
                         mat)
   proc cyl[S: SomeSpectrum](r, h: float, tel: Telescope, mat: Material[S]): Hittable[S] =
     result = toHittable(Cylinder(radius: r, zMin: 0.0, zMax: tel.lMirror,
-                                 phiMax: tel.mirrorSize.degToRad),
+                                 phiMax: tel.mirrorSize.to(Radian)),
                         mat)
   proc disk(r, thick: float, tel: Telescope, mat: Material[RGBSpectrum]): Hittable[RGBSpectrum] =
-    result = toHittable(Disk(distance: 0.0, radius: r + thick, innerRadius: r, phiMax: tel.mirrorSize.degToRad), mat)
+    result = toHittable(Disk(distance: 0.0, radius: r + thick, innerRadius: r, phiMax: tel.mirrorSize.to(Radian)), mat)
 
 
   proc transform[S: SomeSpectrum](h: Hittable[S], xOrigin, yOffset, z: float, tel: Telescope): Hittable[S] =
     result = h.rotateZ(tel.mirrorSize / 2.0) # rotate out half the miror size to center "top" of mirror
       .translate(vec3(xOrigin, 0.0, -tel.lMirror / 2.0)) # move to its center
       #.rotateY(angle) ## For a cylinder telescope
-      .rotateX(180.0) # we consider from magnet! This also means the magnet side of the telescope is aligned!
-      .rotateZ(-90.0)
+      .rotateX(180.0.°) # we consider from magnet! This also means the magnet side of the telescope is aligned!
+      .rotateZ(-90.0.°)
       .translate(vec3(0.0, yOffset, z + tel.lMirror / 2.0)) # move to its final position
 
-  proc setCone[S: SomeSpectrum](r, angle, y, z: float,
+  proc setCone[S: SomeSpectrum](r: float, angle: Radian, y, z: float,
                                 fullTelescope, ignoreMirrorThickness: bool,
                                 mirrorThickness: float,
                                 tel: Telescope, magnet: Magnet, mat: Material[S]): GenericHittablesList =
     # `xOffset` is the displacement from front to center of mirror (x because cone with `phiMax`
     # starts from x = 0)
     result = initGenericHittables()
-    let xOffset = (sin(angle.degToRad) * tel.lMirror) / 2.0
+    let xOffset = (sin(angle) * tel.lMirror) / 2.0
     let height = calcHeight(r, angle) # total height of the cone that yields required radius and angle
 
-    let zMax = cos(angle.degToRad) * tel.lMirror
+    let zMax = cos(angle) * tel.lMirror
     let c = cone(r, height, zMax, tel, mat)
     #let c = cyl(r, height) ## To construct a fake telescope
     # for the regular telescope first move to -r + xOffset to rotate around center of layer. Full no movement
@@ -1278,6 +1278,12 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope: bool, cfg: Con
       let c = cone(r, height, zMax, tel, mat)
       result.add d.transform(xOrigin, yOffset, z, tel)
       result.add c.transform(xOrigin, yOffset + thick, z, tel)
+
+  proc calcAngle(r1, r2: float, lMirror: float): Degree =
+    ## `r1` should be the larger radius. Computes the angle of the cone based on the
+    ## known length of the mirrors (tel.lMirror) and the height difference between
+    ## front and back.
+    result = arcsin(abs(r1 - r2) / lMirror).Radian.to(Degree)
 
   const sanity = false
   let
@@ -1323,13 +1329,13 @@ proc initSetup(fullTelescope: bool): (Telescope, Magnet) =
       boreRadius = 43.0 / 2 # mm
       length = 9.26 # m
       telescopeMagnetZOffset = 1.0 # 1 mm
-      mirrorSize = 30.0 # 30 degree mirrors
+      mirrorSize = 30.0.° # 30 degree mirrors
     result = (initTelescope(tkLLNL, mirrorSize), initMagnet(boreRadius, length))
   else:
     const
       length = 9.26 # m
       telescopeMagnetZOffset = 1.0 # 1 mm
-      mirrorSize = 360.0 # entire cones for the full telescope
+      mirrorSize = 360.0.° # entire cones for the full telescope
     let llnl = initTelescope(tkLLNL, mirrorSize)
     ## For the full telescope the bore radius is the size of the outer most largest cone
     let boreRadius = llnl.allR1[^1]
@@ -1382,7 +1388,7 @@ proc sceneLLNL(rnd: var Rand, cfg: Config): GenericHittablesList =
                          ignoreWindow = true)
 
   if cfg.endTelescopeSensor: # sensor placed between both telescope mirror sets. Useful to debug image after set 1
-    let α0 = 3.0 * llnl.allAngles[0].degToRad
+    let α0 = 3.0 * llnl.calcAngle(0).to(Radian)
     let offset = (2 * llnl.lMirror) * sin(α0)
     objs.add imageSensor(llnl, magnet, fullTelescope = false, cfg = cfg,
                          pixelsW = 1000, pixelsH = 1000,
@@ -1433,9 +1439,9 @@ proc sceneLLNLTwice(rnd: var Rand, cfg: Config): GenericHittablesList =
   telMag.add llnlTelescope(llnl, magnet, fullTelescope = false, cfg = cfg)
 
   ## XXX: FIX THE -83!
-  objs.add telMag.rotateZ(-90.0)
+  objs.add telMag.rotateZ(-90.0.°)
     .translate(vec3(-83.0, 0.0, 0.0))
-  objs.add telMag.rotateZ(90.0)
+  objs.add telMag.rotateZ(90.0.°)
     .translate(vec3(83.0, 0.0, 0.0))
   ## XXX: BVH node of the telescope is currently broken! Bad shading.
   #result.add telescope #rnd.initBvhNode(telescope)
@@ -1503,9 +1509,9 @@ proc main(width = 600,
           solarModelFile = "",
           nJobs = 16,
           rayAt = 1.0,
-          setupRotation = 90.0,
-          telescopeRotation = 14.17,
-          windowRotation = -30.0,
+          setupRotation = 90.0.°,
+          telescopeRotation = 14.17.°,
+          windowRotation = -30.0.°,
           windowZOffset = 3.0,
           ignoreWindow = false,
           sensorKind = sCount,

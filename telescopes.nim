@@ -72,6 +72,23 @@ proc initTelescope*(kind: TelescopeKind, mirrorSize: float): Telescope =
 
 proc length*(tel: Telescope): float = tel.lMirror * 2 + tel.xSep
 
+from std/math import arcsin
+from std/stats import mean
+proc calcAngle*(tel: Telescope, idx: int): Degree =
+  ## Helper that returns the angle of the *first* set of mirrors for the given
+  ## shell index `idx`.
+  ## Returns the angle in Degree
+  if idx > tel.allR1.len:
+    raise newException(ValueError, "Invalid shell at index: " & $idx)
+  result = arcsin(abs(tel.allR1[idx] - tel.allR2[idx]) / tel.lMirror).Radian.to(Degree)
+
+proc meanAngle*(tel: Telescope): Degree =
+  ## Returns the mean angle of all shells
+  var angles = newSeq[float](tel.allR1.len)
+  for i in 0 ..< angles.len:
+    angles[i] = tel.calcAngle(i).float # Degree
+  result = angles.mean.Degree
+
 proc initMagnet*(radius: float, length = 9.26): Magnet =
   result = Magnet(lengthColdbore: length * 1000.0 + 500,
                   length: length * 1000,

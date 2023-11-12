@@ -756,21 +756,28 @@ proc initBvhNode*[S: SomeSpectrum](rnd: var Rand, list: HittablesList[S], start,
 
   result.box = surroundingBox(boxLeft, boxRight)
 
+from unchained import Degree, Radian, to
 template rotations(name: untyped): untyped =
-  proc `name`*[S: SomeSpectrum](h: Hittable[S], angle: float): Hittable[S] =
+  proc `name`*[S: SomeSpectrum](h: Hittable[S], angle: Degree): Hittable[S] =
     result = h.clone()
-    result.trans = `name`(h.trans, angle.degToRad)
+    result.trans = `name`(h.trans, angle.to(Radian).float)
     result.invTrans = result.trans.inverse()
-  proc `name`*[S: SomeSpectrum](h: HittablesList[S], angle: float): HittablesList[S] =
+  proc `name`*[S: SomeSpectrum](h: HittablesList[S], angle: Degree): HittablesList[S] =
     result = initHittables[S](h.len)
     for x in h:
       result.add name(x, angle)
-  proc `name`*(h: GenericHittablesList, angle: float): GenericHittablesList =
+  proc `name`*(h: GenericHittablesList, angle: Degree): GenericHittablesList =
     result = initGenericHittables()
     for x in h.rgbs:
       result.add name(x, angle)
     for x in h.xray:
       result.add name(x, angle)
+  proc `name`*(p: Point, angle: Degree): Point =
+    ## Convenience rotation of `p` around `angle`
+    let T = `name`(mat4d(), angle.to(Radian).float)
+    let vt = T * vec4d(p.Vec3d, w = 1)
+    result = point(vec3(vt.x, vt.y, vt.z) / vt.w)
+
 rotations(rotateX)
 rotations(rotateY)
 rotations(rotateZ)
