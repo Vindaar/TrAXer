@@ -62,6 +62,7 @@ type
     sourceOnOpticalAxis = false
     # targets
     visibleTarget: bool
+    targetRadius: MilliMeter = 0.mm
 
 var Tracing = ttCamera
 
@@ -78,6 +79,7 @@ proc initConfig(visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: So
                 ignoreSpacer: bool,
                 sourceDistance: Meter, sourceRadius: MilliMeter,
                 sourceOnOpticalAxis: bool,
+                targetRadius: MilliMeter,
                ): Config =
   result = Config(visibleTarget: visibleTarget,
                   gridLines: gridLines,
@@ -102,6 +104,7 @@ proc initConfig(visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: So
                   sourceDistance: sourceDistance,
                   sourceRadius: sourceRadius,
                   sourceOnOpticalAxis: sourceOnOpticalAxis,
+                  targetRadius: targetRadius,
 
 proc initRenderContext(rnd: var Rand,
                        buf: ptr UncheckedArray[uint32], counts: ptr UncheckedArray[int],
@@ -995,22 +998,31 @@ proc source(tel: Telescope, magnet: Magnet, magnetPos: float, cfg: Config): Hitt
   of skXrayFinger, skParallelXrayFinger: result = xrayFinger(tel, magnet, magnetPos, cfg)
 
 proc target(tel: Telescope, magnet: Magnet,
-            visibleTarget: bool): Hittable[XraySpectrum] =
+            visibleTarget: bool,
+            atTelSideMagnet: bool,
+            targetRadius: MilliMeter): Hittable[XraySpectrum] =
   ## Construct a target for the light source. We want to sample towards the end of the magnet
   ## (the side towards the telescope)
   let z = tel.length() ## Position of telescope end on magnet side
   let pink = color(1.0, 0.05, 0.9)
   #result = toHittable(Disk(distance: 0.0, radius: magnet.radius),
-  result = toHittable(Disk(distance: 0.0, radius: magnet.radius * 1.2),
+  let posOffset = if atTelSideMagnet: 50.0 # 5 cm inside of the magnet
+                  else: magnet.length
+  let targetRadius = if targetRadius > 0.mm: targetRadius else: (magnet.radius * 1.2).mm
+  result = toHittable(Disk(distance: 0.0, radius: targetRadius.float),
                       toSpectrum(toMaterial(initLightTarget(pink, visibleTarget)), XraySpectrum))
-    .translate(vec3(0.0, 0.0, z + magnet.length))
+    .translate(vec3(0.0, 0.0, z + posOffset))
 
 proc lightSource(tel: Telescope, magnet: Magnet, magnetPos: float, cfg: Config): GenericHittablesList =
   ## Constructs a light source as well as the optional target if needed.
   result = initGenericHittables()
   result.add source(tel, magnet, magnetPos, cfg)
-  if cfg.sourceKind != skParallelXrayFinger:
-    result.add target(tel, magnet, cfg.visibleTarget)
+  case cfg.sourceKind
+  of skXrayFinger: # place target at the telescope side of the magnet
+    result.add target(tel, magnet, cfg.visibleTarget, atTelSideMagnet = true, targetRadius = cfg.targetRadius)
+  of skSun: # place target at entrance side of the magnet
+    result.add target(tel, magnet, cfg.visibleTarget, atTelSideMagnet = false, targetRadius = cfg.targetRadius)
+  of skParallelXrayFinger: discard # do not place a target
 
 proc magnetBore(magnet: Magnet, magnetPos: float): Hittable[RGBSpectrum] =
   let cylMetal = initMaterial(initMetal(color(0.2, 0.2, 0.6), 0.2))
@@ -1452,7 +1464,7 @@ proc sceneLLNLTwice(rnd: var Rand, cfg: Config): GenericHittablesList =
   of skXrayFinger, skParallelXrayFinger:
     telMag.add xrayFinger(llnl, magnet, magnetPos, cfg)
   # Need two targets in both source cases
-  telMag.add target(llnl, magnet, cfg.visibleTarget)
+  telMag.add target(llnl, magnet, cfg.visibleTarget, atTelSideMagnet = cfg.sourceKind == skXrayFinger, targetRadius = cfg.targetRadius)
   telMag.add magnetBore(magnet, magnetPos)
   if not cfg.ignoreSpacer:
     telMag.add graphiteSpacer(llnl, magnet, fullTelescope = false)
@@ -1547,6 +1559,7 @@ proc main(width = 600,
           sourceDistance = 14.2.m,
           sourceRadius = 3.0.mm
           sourceOnOpticalAxis = false,
+          targetRadius = 0.mm,
          ) =
   # Image
   #THREADS = nJobs
@@ -1572,6 +1585,7 @@ proc main(width = 600,
                        ignoreSpacer,
                        sourceDistance, sourceRadius,
                        sourceOnOpticalAxis,
+                       targetRadius,
   # World
   ## Looking at mirrors!
   var lookFrom: Point = point(1,1,1)
