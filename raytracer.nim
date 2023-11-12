@@ -575,7 +575,7 @@ proc renderSdl*(img: Image, world: GenericHittablesList,
         of SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT, SDL_SCANCODE_A, SDL_SCANCODE_D:
           let cL = (camera.lookFrom - camera.lookAt).Vec3d
           let zAx = vec3(0.0, 1.0, 0.0)
-          let newFrom = speed * cL.cross(zAx).normalize().Point
+          let newFrom = point(speed * cL.cross(zAx).normalize())
           var nCL: Point
           var nCA: Point
           if event.key.keysym.scancode in {SDL_SCANCODE_LEFT, SDL_SCANCODE_A}:
@@ -600,11 +600,11 @@ proc renderSdl*(img: Image, world: GenericHittablesList,
           var nCL: Point
           var nCA: Point
           if event.key.keysym.scancode in {SDL_SCANCODE_UP, SDL_SCANCODE_W}:
-            nCL = camera.lookFrom -. cL.Point
-            nCA = camera.lookAt -. cL.Point
+            nCL = camera.lookFrom -. point(cL)
+            nCA = camera.lookAt -. point(cL)
           else:
-            nCL = camera.lookFrom +. cL.Point
-            nCA = camera.lookAt +. cL.Point
+            nCL = camera.lookFrom +. point(cL)
+            nCA = camera.lookAt +. point(cL)
 
           camera.updateLookFromAt(nCL, nCA)
           resetBufs(bufT, counts)
@@ -612,9 +612,9 @@ proc renderSdl*(img: Image, world: GenericHittablesList,
           let cL = (camera.lookFrom - camera.lookAt).Vec3d
           let zAx = vec3(1.0, 0.0, 0.0)
           let newFrom = if cL.dot(zAx) > 0:
-                          speed * cL.cross(zAx).normalize().Point
+                          speed * point(cL.cross(zAx).normalize())
                         else:
-                          speed * -cL.cross(zAx).normalize().Point
+                          speed * point(-cL.cross(zAx).normalize())
           var nCL: Point
           var nCA: Point
           if event.key.keysym.scancode == SDL_SCANCODE_LCTRL:
@@ -819,7 +819,7 @@ proc sceneCast(): GenericHittablesList =
 
   let strMetal = initMaterial(initMetal(color(0.6, 0.6, 0.6), 0.2))
   let telBox = rotateX(toHittable(initBox(point(-2, 1.5, 4), point(0, 1.75, 5.5)),
-                                  strMetal), 30.0)
+                                  strMetal), 30.0.°)
   result.add telBox
 
   let concreteMaterial = initMaterial(initLambertian(color(0.6, 0.6, 0.6)))
@@ -1045,11 +1045,13 @@ proc llnlFocalPointRay(tel: Telescope, magnet: Magnet, fullTelescope: bool): Ray
                 else: 83.0 #r1_0 + sin(α0) * lMirror / 2 #(r1_0 - sin(α0) * lMirror / 2.0) + magnet.radius
 
   block Sanity:
-    echo "TANNNN ", tan(4*α0) * 1530 #tel.focalLength # + 21.5
+    echo "TANNNN ", tan(4*α0.to(Radian)) * 1530 #tel.focalLength # + 21.5
+    echo "TANNNN mean ", tan(4*αMean.to(Radian)) * 1530 #tel.focalLength # + 21.5
+    echo "TANNNN mean ", tan(4*αMean.to(Radian)) * 1500 + tan(αMean.to(Radian)) * (225.0 + 2.0)
     echo "Offset should be: ", yOffset
     echo "Corresponds to angle = ", arctan(yOffset / (1500 + xSep / 2 + lMirror / 2)).radToDeg, " from front mirror!"
     #let yOffset
-    echo "Corresponds to angle = ", arctan((yOffset + magnet.radius) / 1500).radToDeg, " it is= ", sin(α0) * lMirror / 2
+    echo "Corresponds to angle = ", arctan((yOffset + magnet.radius) / 1500).radToDeg, " it is= ", sin(α0.to(Radian)) * lMirror / 2
 
   ## NOTE: expected offset is about -83 mm from telescope center.
   let p = point(0, 0, telCenter)
