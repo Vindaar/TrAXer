@@ -241,27 +241,34 @@ proc scatter*[S: SomeSpectrum](
   attenuation = m.albedo
   result = scattered.dir.dot(rec.normal) > 0
 
+from std / os import getEnv
+from std / strutils import parseFloat
+## Note: Long term this will maybe not stay in here as a feature. But for the time being it is
+## useful. These are the values used to achieve a figure error matching the PANTER dataset
+## of the LLNL telescope. The match is not perfect, but it is similar enough.
+## It was determined using non linear optimization of the raytracer, by setting these
+## parameters on the raytracing call in batch mode and computing the HPD, circle of 80 and 90%
+## fluxes and comparing with the ideal value for the Al Kα line.
+## (making these a command line argument would require us to replace the `fuzz` field of `XrayMatter`
+## by all these fields. Possible, but for the time being not needed.
+let fuzzIn = getEnv("FUZZ_IN", "3.257544581618656").parseFloat
+let fuzzOrth = getEnv("FUZZ_ORTH", "0.2242798353909466").parseFloat
+let fuzzInScale = getEnv("FUZZ_IN_SCALE", "0.9814814814814816").parseFloat
+let fuzzOuterScale = getEnv("FUZZ_OUTER_SCALE", "9.22976680384088").parseFloat
+let fuzzInRatio = getEnv("FUZZ_IN_RATIO", "1.083333333333333").parseFloat
+
 proc scatter*[S: SomeSpectrum](
   m: XrayMatter[S], rnd: var Rand, r_in: Ray, rec: HitRecord[S],
   attenuation: var S, scattered: var Ray
                              ): bool {.gcsafe.}  =
   let r_inUnit = r_in.dir.unitVector
   let angle = abs(90.0 - arccos(r_inUnit.dot(rec.normal)).radToDeg) # calc incidence angle
-  #let energy = r_in.energy # in keV
-  ## Apply reflectivity
-  #let refl = m.refl.eval(angle) # yields full 1D seq of `NumSamples`
-
-  #attenuation = toSpectrum(m.refl.eval(angle), S) # yields full 1D seq of `NumSamples`
+  ## Apply reflectivity (if incoming is X-rays and not camera rays)
   ## XXX: MAKE THIS adjustable based on some keyboard command!
   if r_in.typ == rtLight:
     m.refl.eval(angle, attenuation)
-    #echo "Angle: ", angle, " from : ", toSpectrum(m.albedo, RGBSpectrum), " at ", rec.p #" raw: ", 90.0 - arccos(r_inUnit.dot(rec.normal)).radToDeg
-    #if angle > 1.3:
-    #  echo "XrayMatter Reflection yields: ", attenuation
   else:
     attenuation = m.albedo
-  #echo "Attenuation: ", attenuation
-  #attenuation = toSpectrum(color(refl, refl, refl), S)
   # XXX: based on ratio of reflected and transmitted decide if we reflect or transmit
   ## XXX: should we go by the mean? Or how to deal with it? Just separate completely?
   let toReflect = true ## rnd.rand(1.0) <= refl
@@ -269,7 +276,26 @@ proc scatter*[S: SomeSpectrum](
     var reflected = r_inUnit.reflect(rec.normal)
     ## XXX: implement `fuzz` not as random in unit sphere, but random in normal distribution!
     if m.fuzz > 0.0: # no need to random sample if `fuzz` not used
-      scattered = initRay(rec.p, reflected + m.fuzz * rnd.randomInNormalDist(), r_in.typ)
+      # -> this is the 'old' standard way of fuzzing into a normal distribution
+      #scattered = initRay(rec.p, reflected + m.fuzz * rnd.randomInNormalDist(), r_in.typ)
+      # Compute two orthogonal vectors to the outgoing vector. We will then fuzz into each
+      # direction separately. We want more fuzzing in the plane of the surface normal and
+      # incoming / outgoing ray than in the orthogonal to that.
+      let n_orth = cross(reflected, rec.normal).normalize
+      let r_orth = cross(reflected, n_orth).normalize
+      # The idea is to sample from 2 normal distribution. One very narrow one which is used
+      # for most (about 1σ of samples) and if the value is too large we sample again
+      # from a wider normal distribution. We attempt to reproduce the fact that the majority
+      # is in a "spiky center" and the tails are much longer than such a normal distribution can
+      # describe.
+      let fzIn = fuzzIn * fuzzInScale
+      let factor = rnd.gauss(mu = 0.0, sigma = fzIn)
+      let fc = if factor > fzIn * fuzzInRatio: rnd.gauss(mu = 0.0, sigma = fuzzIn * fuzzOuterScale)
+               else: factor
+      # orthogonal scaling
+      let factor_orth = rnd.gauss(mu = 0.0, sigma = fuzzOrth)
+      # final ray: reflected and the two orthogonal fuzzing components
+      scattered = initRay(rec.p, reflected + m.fuzz * (fc * r_orth) + m.fuzz * (factorOrth * n_orth), r_in.typ)
     else:
       scattered = initRay(rec.p, reflected, r_in.typ)
     result = scattered.dir.dot(rec.normal) > 0
