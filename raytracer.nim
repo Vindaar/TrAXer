@@ -1085,7 +1085,8 @@ proc llnlFocalPointRay(tel: Telescope, magnet: Magnet, fullTelescope: bool): Ray
 
   ## NOTE: expected offset is about -83 mm from telescope center.
   let p = point(0, 0, telCenter)
-  var target = point(0.0, -yOffset, - tel.focalLength + telCenter)
+  let realOffset = tan(4*αMean.to(Radian)) * tel.focalLength + tan(αMean.to(Radian)) * (225.0 + 2.0)
+  var target = point(0.0, -realOffset, - tel.focalLength + telCenter)
 
   #let FL = 1530.0
   #var target = point(0.0, -yOffset, - FL + telCenter)
@@ -1323,25 +1324,36 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope: bool, cfg: Con
     xSep = tel.xSep
   let reflectivity = setupReflectivity(cfg.energyMin, cfg.energyMax, NumSamples) ## `fluxCDF.nim`
   let r1_0 = tel.allR1[0]
+  var lastR1 = 0.0
   for i in 0 ..< tel.allR1.len:
     let
       r1 = tel.allR1[i]
+      r2 = tel.allR2[i]
+      r4 = tel.allR4[i]
       r5 = tel.allR5[i]
-      angle = tel.allAngles[i] ## * 1.02 yields 1500mm focal length
-      r4 = r5 + lMirror * sin(3.0 * angle.degToRad)
-    let (ySep, yL1, yL2) = calcYlYsep(angle, xSep, lMirror)
+      # angle for first mirror
+      α1 = calcAngle(r1, r2, tel.lMirror)
+      # second set of mirror. Use r4, r5 to compute "base" angle, then multiply by 3
+      ## XXX: Is that the correct thing to do? That has an effect on the cone shape after all, no?
+      ## Or is angle α cone, then rotate by 2 α correct?
+      α2 = calcAngle(r4, r5, tel.lMirror)
+
+    let (ySep, yL1, yL2) = calcYlYsep(α1, xSep, lMirror)
+    #echo "Angle α1 = ", α1, " and α2 = ", α2
+    #echo "i = ", i, " R1 = ", r1, " R2 = ", r2, " R3 = ", r3, " lastR1+0.2 = ", lastR1 + tel.glassThickness
+    lastR1 = r1
     # `pos`, `pos2` are the `y` positions of first & second set of mirrors.
     let pos1 = (r1 - r1_0) ## Only shift each layer relative to first layer. Other displacement done in `setCone`
     let pos2 = pos1 - yL1 / 2.0 - yL2 / 2.0 - ySep
     # cone of the front (= towards magnet) shell
     template con1[S: SomeSpectrum](mat: Material[S]): untyped =
-      setCone(r1, angle,     pos1, lMirror + xSep,
+      setCone(r1, α1.to(Radian), pos1, lMirror + xSep,
               fullTelescope, cfg.ignoreMirrorThickness, cfg.mirrorThickness,
               tel, magnet, mat)
     # cone of the rear (= towards detector) shell
     template con2[S: SomeSpectrum](mat: Material[S]): untyped =
       ## NOTE: using `r1` as well reproduces the X-ray finger results from the _old_ raytracer!
-      setCone(r4, 3 * angle, pos2, 0.0,
+      setCone(r4, α2.to(Radian), pos2, 0.0,
               fullTelescope, cfg.ignoreMirrorThickness, cfg.mirrorThickness,
               tel, magnet, mat)
     ## Add mirrors with correct materials (different types!)
@@ -1353,7 +1365,7 @@ proc llnlTelescope(tel: Telescope, magnet: Magnet, fullTelescope: bool, cfg: Con
       result.add con1(brokenMirror(color(1,0,0)))
       result.add con2(brokenMirror(color(1,0,0)))
     if sanity:
-      sanityTelescopeOutput(i, r1, r5, pos1, pos2, angle, lMirror, xSep, yL1, yL2, ySep, magnet.radius)
+      sanityTelescopeOutput(i, r1, r5, pos1, pos2, α1, lMirror, xSep, yL1, yL2, ySep, magnet.radius)
 
 proc initSetup(fullTelescope: bool): (Telescope, Magnet) =
   if not fullTelescope:
