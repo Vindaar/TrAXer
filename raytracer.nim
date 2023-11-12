@@ -31,7 +31,6 @@ type
     skSun, skXrayFinger, skParallelXrayFinger
 
   Config = object
-    visibleTarget: bool
     gridLines: bool
     usePerfectMirror: bool
     sourceKind: SourceKind
@@ -60,6 +59,9 @@ type
     # X-ray source fields
     sourceDistance = 14.2.m # distance of the source ``from the telescope entrance``
     sourceRadius = 3.0.mm
+    sourceOnOpticalAxis = false
+    # targets
+    visibleTarget: bool
 
 var Tracing = ttCamera
 
@@ -74,7 +76,9 @@ proc initConfig(visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: So
                 ignoreMirrorThickness: bool,
                 mirrorThickness: float,
                 ignoreSpacer: bool,
-                sourceDistance: Meter, sourceRadius: MilliMeter): Config =
+                sourceDistance: Meter, sourceRadius: MilliMeter,
+                sourceOnOpticalAxis: bool,
+               ): Config =
   result = Config(visibleTarget: visibleTarget,
                   gridLines: gridLines,
                   usePerfectMirror: usePerfectMirror,
@@ -96,7 +100,8 @@ proc initConfig(visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: So
                   mirrorThickness: mirrorThickness,
                   ignoreSpacer: ignoreSpacer,
                   sourceDistance: sourceDistance,
-                  sourceRadius: sourceRadius)
+                  sourceRadius: sourceRadius,
+                  sourceOnOpticalAxis: sourceOnOpticalAxis,
 
 proc initRenderContext(rnd: var Rand,
                        buf: ptr UncheckedArray[uint32], counts: ptr UncheckedArray[int],
@@ -966,9 +971,20 @@ proc xrayFinger(tel: Telescope, magnet: Magnet, magnetPos: float, cfg: Config): 
   of skXrayFinger: # classical emission allowing all angles
     ## X-ray finger as mentioned in the PhD thesis of A. Jakobsen (14.2 m distance, 3 mm radius), CAST nature mentions
     ## 12 m. Radius is more questionable in both. PANTER: 128m and point source.
-    let sunMaterial = toSpectrum(initMaterial(initDiffuseLight(color(1.0, 1.0, 0.5))), XraySpectrum)
-    result = translate(point(0, 0, magnetPos + cfg.sourceDistance.to(MilliMeter).float),
-                       toHittable(Disk(distance: 0.0, radius: cfg.sourceRadius.float), sunMaterial))
+    if not cfg.sourceOnOpticalAxis:
+      let sunMaterial = toSpectrum(initMaterial(initDiffuseLight(color(1.0, 1.0, 0.5))), XraySpectrum)
+      result = translate(point(0, 0, magnetPos + cfg.sourceDistance.to(MilliMeter).float),
+                         toHittable(Disk(distance: 0.0, radius: cfg.sourceRadius.float), sunMaterial))
+    else:
+      ## Move the source to the optical axis exactly "in front" along the z-axis of the
+      ## image sensor.
+      let αMean = tel.meanAngle()
+      let realOffset = tan(4*αMean.to(Radian)) * tel.focalLength + tan(αMean.to(Radian)) * (225.0 + 2.0)
+      let sunMaterial = toSpectrum(initMaterial(initDiffuseLight(color(1.0, 1.0, 0.5))), XraySpectrum)
+      result = translate(point(0, -realOffset, magnetPos + cfg.sourceDistance.to(MilliMeter).float),
+                         toHittable(Disk(distance: 0.0, radius: cfg.sourceRadius.float), sunMaterial))
+        .rotateZ(cfg.setupRotation - cfg.telescopeRotation)
+
   else: doAssert false, "Invalid branch, not an X-ray finger."
 
 proc source(tel: Telescope, magnet: Magnet, magnetPos: float, cfg: Config): Hittable[XraySpectrum] =
@@ -1528,6 +1544,7 @@ proc main(width = 600,
           energy = Inf, # If given produce only signals at *this* energy. Overrides min / max
           sourceDistance = 14.2.m,
           sourceRadius = 3.0.mm
+          sourceOnOpticalAxis = false,
          ) =
   # Image
   THREADS = nJobs
@@ -1551,7 +1568,8 @@ proc main(width = 600,
                        ignoreMirrorThickness,
                        mirrorThickness,# adjust mirror thickenss. 0.2 by default
                        ignoreSpacer,
-                       sourceDistance, sourceRadius)
+                       sourceDistance, sourceRadius,
+                       sourceOnOpticalAxis,
   # World
   ## Looking at mirrors!
   var lookFrom: Point = point(1,1,1)
