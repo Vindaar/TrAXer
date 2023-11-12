@@ -22,7 +22,7 @@ type
     allXsep*: seq[float] # seq[MilliMeter]
     allAngles*: seq[float] #seq[Degree]
     lMirror*: float#mm
-    mirrorSize*: float # Degree # size of mirrors in degrees of the cones
+    mirrorSize*: Degree # size of mirrors in degrees of the cones
     #holeInOptics*: float# mm
     #numberOfHoles*: int
     #holeType*: HoleType
