@@ -617,7 +617,7 @@ template transforms(name, field: untyped): untyped =
     # calculate transformed vector
     let vt = h.field * vec4d(p.Vec3d, w = 1) ## XXX: For points we *CURRENTLY* just assume weight 1
     # construct result Point
-    result = Point(vec3(vt.x, vt.y, vt.z) / vt.w)
+    result = point(vec3(vt.x, vt.y, vt.z) / vt.w)
 
   proc `name`*[S: SomeSpectrum](h: Hittable[S], r: Ray): Ray =
     result = Ray(orig: h.name(r.orig), dir: h.name(r.dir))
@@ -855,7 +855,7 @@ proc getRandomPointFromSolarModel(radius: float,
     r2 = (0.0015 + (rIdx).float * 0.0005) * radius # in mm
   doAssert abs(r2 - r) < 1e-3, "r2 = " & $r2 & ", r = " & $r
   let p = rnd.randomInUnitSphere() * r
-  result = Point(p)
+  result = point(p)
 
 proc samplePoint*[S: SomeSpectrum](h: Hittable[S], rnd: var Rand): Point {.gcsafe.}
 proc samplePoint*(s: Sphere, rnd: var Rand, mat: Material): Point {.gcsafe.} =
@@ -868,11 +868,11 @@ proc samplePoint*(s: Sphere, rnd: var Rand, mat: Material): Point {.gcsafe.} =
   else:
     ## Sample uniformly from the sphere
     let p = rnd.randomInUnitSphere()
-    result = Point(p * s.radius)
+    result = point(p * s.radius)
 
 proc samplePoint*(d: Disk, rnd: var Rand): Point {.gcsafe.} =
   ## Samples a random point on the disk surface
-  result = Point(rnd.randomInUnitDisk() * d.radius)
+  result = point(rnd.randomInUnitDisk() * d.radius)
 
 proc samplePoint*(c: Cylinder, rnd: var Rand): Point {.gcsafe.} =
   ## Samples a random point on the cylinder surface

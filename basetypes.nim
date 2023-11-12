@@ -14,24 +14,32 @@ type
 
   ColorU8* = tuple[r, g, b: uint8]
 
-template borrowOps(typ: typed): untyped =
-  proc `[]=`*(v: var typ; ix: int; c: float): void {.inline, borrow.}
-  proc `x=`*(v: var typ; c: float): void {.inline, borrow.}
-  proc `y=`*(v: var typ; c: float): void {.inline, borrow.}
-  proc `z=`*(v: var typ; c: float): void {.inline, borrow.}
-  proc `w=`*(v: var typ; c: float): void {.inline, borrow.}
-  proc `[]`*(v: typ; ix: int): float {.inline, borrow.}
+proc point*(v: Vec3d): Point = Point(v)
+proc color*(v: Vec3d): Color = Color(v)
+
+template borrowOps(typ: typedesc): untyped =
+  proc `[]=`*(v: var typ; ix: int; c: float): void {.borrow.}
+  proc `x=`*(v: var typ; c: float): void {.borrow.}
+  proc `y=`*(v: var typ; c: float): void {.borrow.}
+  proc `z=`*(v: var typ; c: float): void {.borrow.}
+  proc `w=`*(v: var typ; c: float): void {.borrow.}
+  proc `[]`*(v: typ; ix: int): float {.borrow.}
   # following cannot be borrowd
-  # proc `[]`*(v: var Color; ix: int): var float {.inline, borrow.}
+  # proc `[]`*(v: var Color; ix: int): var float {.borrow.}
   proc dot*(v, u: typ): float {.borrow.}
   proc cross*(v, u: typ): typ {.borrow.}
-  #proc length_squared*(v: typ): float {.inline, borrow.}
-  proc length*(v: typ): float {.inline, borrow.}
-  proc normalize*(v: typ): typ {.inline, borrow.}
-  proc `+`*(v: typ): typ {.inline, borrow.}
-  proc `-`*(v: typ): typ {.inline, borrow.}
-  proc `+=`*(v: var typ, u: typ) {.inline, borrow.}
-  proc `-=`*(v: var typ, u: typ) {.inline, borrow.}
+  #proc length_squared*(v: typ): float {.borrow.}
+  proc length*(v: typ): float {.borrow.}
+  #proc normalize*(v: typ): typ {.borrow.}
+  #proc `+`*(v: typ): typ {.borrow.}
+  #proc `-`*(v: typ): typ {.borrow.}
+  #proc `+=`*(v: var typ, u: typ) {.borrow.}
+  #proc `-=`*(v: var typ, u: typ) {.borrow.}
+  proc `-`*(v: typ): typ =
+    for i in 0 ..< 3: result[i] = -result[i]
+  proc `+`*(v: typ): typ = v
+  proc normalize*(v: typ): typ {.inline.} = typ(normalize(v))
+
 borrowOps(Color)
 borrowOps(Point)
 
@@ -52,9 +60,19 @@ proc `$`*(v: Color): string =
   result = &"(Color: [{v[0]}, {v[1]}, {v[2]}])"
 
 template makeMathBorrow(typ, op: typed): untyped {.dirty.} =
-  proc `op`*(v, u: typ): typ {.inline, borrow.}
-  proc `op`*(v: typ; val: float): typ {.inline, borrow.}
-  proc `op`*(val: float; v: typ): typ {.inline, borrow.}
+  #proc `op`*(v, u: typ): typ {.borrow.}
+  #proc `op`*(v: typ; val: float): typ {.borrow.}
+  #proc `op`*(val: float; v: typ): typ {.borrow.}
+  proc `op`*(v, u: typ): typ =
+    for i in 0 ..< 3:
+      result[i] = `op`(v[i], u[i])
+  proc `op`*(v: typ; val: float): typ =
+    for i in 0 ..< 3:
+      result[i] = `op`(v[i], val)
+  proc `op`*(val: float; v: typ): typ =
+    for i in 0 ..< 3:
+      result[i] = `op`(val, v[i])
+
 makeMathBorrow(Color, `+`)
 makeMathBorrow(Color, `-`)
 makeMathBorrow(Color, `/`)

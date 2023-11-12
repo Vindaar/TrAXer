@@ -33,7 +33,7 @@ proc initCamera*(lookFrom, lookAt: Point, vup: Vec3d, vfov, aspectRatio: float,
   var lookAt = lookAt
   let hasAngles = classify(yaw) != fcNaN and classify(pitch) != fcNaN
   if hasAngles:
-    lookAt = Point(lookFrom.Vec3d + vec3(cos(-yaw) * cos(pitch), sin(pitch), sin(-yaw) * cos(pitch)))
+    lookAt = point(lookFrom.Vec3d + vec3(cos(-yaw) * cos(pitch), sin(pitch), sin(-yaw) * cos(pitch)))
     result.yaw = yaw
     result.pitch = pitch
     result.roll = roll
@@ -60,7 +60,7 @@ proc initCamera*(lookFrom, lookAt: Point, vup: Vec3d, vfov, aspectRatio: float,
 
   # Calculate the location of the upper left pixel.
   let viewport_upper_left = result.center.Vec3d - (focus_dist * result.w) - viewport_u / 2.0 - viewport_v / 2.0
-  result.pixel00_loc = Point(viewport_upper_left + 0.5 * (result.pixel_delta_u + result.pixel_delta_v))
+  result.pixel00_loc = point(viewport_upper_left + 0.5 * (result.pixel_delta_u + result.pixel_delta_v))
 
   # Calculate the camera defocus disk basis vectors.
   let defocus_radius = focus_dist * tan(degToRad(defocus_angle / 2))
@@ -102,7 +102,7 @@ proc initCamera*(lookFrom: Point, dir: Vec3d, focusIn: float, vup: Vec3d, vfov, 
                  defocusAngle: float,
                  focusDist: float,
                  background: Color): Camera =
-  let lookAt = (dir.unitVector() * focusIn).Point
+  let lookAt = point(dir.unitVector() * focusIn)
   result = initCamera(lookFrom, lookAt, vup, vfov,
                       aspectRatio, width, defocusAngle, focusDist, background)
 
