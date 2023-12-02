@@ -68,7 +68,7 @@ proc plotHPDViaEEF(df: DataFrame, title, outfile: string, verbose: bool) =
   ggplot(df.filter(f{`EEF` <= 0.999}), aes("r", "EEF")) +
     geom_line() +
     geom_linerange(aes = aes(x = hpdMm / 2.0, yMin = 0.0, yMax = 0.75), color = "red") +
-    annotate(texts, left = 0.05, bottom = 0.15) +
+    annotate(texts, left = 0.60, bottom = 0.2) +
     xlab("Radius [mm]") + ylab("Encircled Energy Function (EEF)") +
     ggtitle(title) +
     #ggshow(outfile.replace(".pdf", "_hpd_via_eef_50.pdf"))
@@ -77,7 +77,7 @@ proc plotHPDViaEEF(df: DataFrame, title, outfile: string, verbose: bool) =
   ggplot(df.filter(f{`EEF` <= 0.999}), aes("Diameter [ArcSecond]", "EEF")) +
     geom_line() +
     geom_linerange(aes = aes(x = hpdArc, yMin = 0.0, yMax = 0.75), color = "red") +
-    annotate(texts, left = 0.05, bottom = 0.15) +
+    annotate(texts, left = 0.60, bottom = 0.2) +
     ylab("Encircled Energy Function (EEF)") +
     ggtitle(title) +
     #ggshow(outfile.replace(".pdf", "_hpd_via_eef_50.pdf"))
