@@ -51,6 +51,36 @@ proc parseData*[T](data: ptr UncheckedArray[T], fname: string, invertY, switchAx
   #let (success, width, height) = scanTuple(fname, " width $i height $i.dat")
   let (success, dx, dy, dz, dtype, len, width, height) = scanTuple(fname, "dx $f dy $f dz $f type $w len $i width $i height $i.dat")
   if success:
-    result = parseDataImpl(dx, dy, width, height)
+    result = data.parseDataImpl(dx, dy, width, height, invertY, switchAxes)
   else:
     raise newException(IOError, "Could not parse filename " & $fname)
+
+import pkg / numericalnim
+proc writeGridPixCsv*(df: DataFrame, outfile: string) =
+  ## Writes a CSV file of the input dataframe (the input is expected to correspond to a
+  ## 14x14mm image sensor dat file!) interpolated to the 256x256 pixels of a GridPix.
+  let ncols = sqrt(df.len.float).round.int
+  doAssert ncols * ncols == df.len, "The input dataframe is not a square in pixels!"
+  var t = zeros[float]([ncols, ncols])
+  for idx in 0 ..< df.len:
+    let x = df["x", int][idx]
+    let y = df["y", int][idx]
+    #echo "X ", x, " and ", y
+    let z = df["z", float][idx]
+    t[x, y] = z
+  # map the data to a bilinear spline from 0 to 255.
+  # We map from 0 to 255, as we just number the pixels. We can still
+  # map this to 0.5 to 255.5 in the limit calc if we want.
+  let intp = newBilinearSpline(t, (0.0, 255.0), (0.0, 255.0)) # bicubic produces negative values!
+  let coords = arange(0.0, 255.0, 1)
+  var zs = newSeqOfCap[float](ncols * ncols)
+  var xs = newSeqOfCap[int](ncols * ncols)
+  var ys = newSeqOfCap[int](ncols * ncols)
+  for x in coords:
+    for y in coords:
+      zs.add intp.eval(x, y)
+      xs.add x.int
+      ys.add y.int
+  let dfOut = toDf({"x" : xs, "y" : ys, "z" : zs})
+  echo "[INFO] Writing GridPix CSV file: ", outfile
+  dfOut.writeCsv(outfile)

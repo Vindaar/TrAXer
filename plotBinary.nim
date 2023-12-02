@@ -201,7 +201,9 @@ proc main(fname, dtype, outfile: string,
           lowQ = 1, highQ = 99,
           xrange = 0.0,
           verbose = false,
-          batchMode = false) =
+          batchMode = false,
+          gridpixOutfile = "" # if given will write a CSV of the data of 256x256 pixels
+         ) =
   let data = readFile(fname)
   template call(typ: untyped): untyped =
     let (df, dx, dy) = parseData(cast[ptr UncheckedArray[typ]](data[0].addr), fname, invertY, switchAxes)
@@ -209,6 +211,9 @@ proc main(fname, dtype, outfile: string,
       plotData(df, dx, dy, fname, outfile, transparent, title, inPixels, lowQ, highQ, xrange)
 
     plotHPD(df, xrange, title, outfile, verbose)
+
+    if gridpixOutfile.len > 0:
+      writeGridPixCsv(df, gridpixOutfile)
   case dtype
   of "uint32": call(uint32)
   of "int": call(int)
