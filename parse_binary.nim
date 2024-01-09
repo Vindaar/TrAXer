@@ -24,7 +24,7 @@ proc parseDataImpl*[T](data: ptr UncheckedArray[T], dx, dy: float, width, height
     for y in 0 ..< height:
       xs.add x
       if invertY:
-        ys.add height - y
+        ys.add height - y - 1
       else:
         ys.add y
       zs.add t[x, y].float
