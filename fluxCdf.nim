@@ -9,21 +9,11 @@ type
     energyMax*: float
 
 const
-  alpha = 1.0 / 137.0
-  g_ae = 1e-13 # Redondo 2013: 0.511e-10
-  gagamma = 1e-12 #the latter for DFSZ  #1e-9 #5e-10 #
-  ganuclei = 1e-15 #1.475e-8 * m_a #KSVZ model #no units  #1e-7
-  m_a = 0.0853 #eV
-  m_e_keV = 510.998 #keV
-  e_charge = sqrt(4.0 * PI * alpha)#1.0
-  kB = 1.380649e-23
   r_sun = 696_342_000_000.0 # .km.to(mm).float # SOHO mission 2003 & 2006
   hbar = 6.582119514e-25 # in GeV * s
   keV2cm = 1.97327e-8 # cm per keV^-1
-  amu = 1.6605e-24 #grams
   r_sunearth = 150_000_000_000_000.0
-
-const factor = pow(r_sun * 0.1 / (keV2cm), 3.0) /
+  factor = pow(r_sun * 0.1 / (keV2cm), 3.0) /
                (pow(0.1 * r_sunearth, 2.0) * (1.0e6 * hbar)) /
                (3.1709791983765E-8 * 1.0e-4) # for units of 1/(keV y m²)
 
