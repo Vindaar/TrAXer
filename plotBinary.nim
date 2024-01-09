@@ -1,8 +1,44 @@
 import ggplotnim, ggplotnim/ggplot_sdl2
-import std / [strscans, strutils, math, strformat]
+import std / [strscans, strutils, math, strformat, sequtils]
+from std / os import getEnv
 
 import ./parse_binary
 import ./calc_eef
+
+let UseTeX = getEnv("USE_TEX", "false").parseBool
+let FWIDTH = getEnv("F_WIDTH", "0.9").parseFloat
+let Width = getEnv("WIDTH", "600").parseFloat
+let Height = getEnv("HEIGHT", "480").parseFloat
+
+proc customThreeway(): Theme =
+  result = sideBySide()
+  result.titleFont = some(font(5.0))
+  result.legendFont = some(font(5.0))
+  result.legendTitleFont = some(font(5.0, bold = true))
+  result.labelFont = some(font(5.0))
+  result.tickLabelFont = some(font(5.0))
+  result.tickLength = some(3.5)
+  result.tickWidth = some(1.0 * 3.5 / 5.0)
+  result.annotationFont = some(font(6.0, family = "monospace"))
+
+proc customSideBySide(): Theme =
+  result = sideBySide()
+  result.titleFont = some(font(8.0))
+
+proc thL(fWidth: float, width: float,
+         baseTheme: (proc(): Theme) = nil,
+         height = -1.0, ratio = -1.0,
+         textWidth = 458.29268, # 455.24411
+        ): Theme =
+  if UseTeX:
+    let baseTheme = if baseTheme != nil: baseTheme
+                    elif fWidth < 0.5: customThreeway
+                    elif fWidth == 0.5: customSideBySide
+                    else: singlePlot
+    result = themeLatex(fWidth, width, baseTheme, height, ratio, textWidth,
+                        useTeX = UseTeX, useWithoutTeX = UseTeX)
+  else:
+    result = Theme()
 
 proc plotData(df: DataFrame, dx, dy: float, fname, outfile: string,
               transparent: bool,
@@ -33,6 +69,8 @@ proc plotData(df: DataFrame, dx, dy: float, fname, outfile: string,
     margin(top = 1.5) +
     xlim(-xrange, xrange) + ylim(-xrange, xrange) +
     scale_fill_gradient(customInferno) +
+    thL(fWidth = FWIDTH, width = Width) +
+    coord_fixed(1.0) +
     ggsave(outfile)
   # plot log10
   let dfNZ = df.filter(f{`z` > 0.0})
@@ -43,6 +81,8 @@ proc plotData(df: DataFrame, dx, dy: float, fname, outfile: string,
     margin(top = 1.5) +
     xlim(-xrange, xrange) + ylim(-xrange, xrange) +
     scale_fill_log10(scale = scale, colorScale = customInferno) +
+    thL(fWidth = FWIDTH, width = Width) +
+    coord_fixed(1.0) +
     ggsave(outfile.replace(".pdf", "_log10.pdf"))
 
 proc plotHPDViaEEF(df: DataFrame, title, outfile: string, verbose: bool) =
@@ -52,6 +92,11 @@ proc plotHPDViaEEF(df: DataFrame, title, outfile: string, verbose: bool) =
   let (c90Mm, c90Arc) = df.calcVal(0.9, verbose = verbose)
   let (c80Mm, c80Arc) = df.calcVal(0.8, verbose = verbose)
   let (hpdMm, hpdArc) = df.calcVal(0.5, verbose = verbose)
+
+  proc keepEvery(df: DataFrame, num: int): DataFrame =
+    result = df.shallowCopy()
+    result["Idx"] = toSeq(0 ..< df.len)
+    result = result.filter(f{int -> bool: `Idx` mod num == 0})
 
   #ggplot(dfX, aes("Diameter [ArcSecond]", "EEF")) +
   #  geom_line() +
@@ -64,23 +109,26 @@ proc plotHPDViaEEF(df: DataFrame, title, outfile: string, verbose: bool) =
   let texts = [&"HPD = {hpdMm:.4f} mm, {hpdArc:.4f} ''",
                &"80% = {c80Mm:.4f} mm, {c80Arc:.4f} ''",
                &"90% = {c90Mm:.4f} mm, {c90Arc:.4f} ''"].join("\n")
-
-  ggplot(df.filter(f{`EEF` <= 0.999}), aes("r", "EEF")) +
+  let dfF = df.filter(f{`EEF` <= 0.999}).keepEvery(100)
+  echo dfF
+  ggplot(dfF, aes("r", "EEF")) +
     geom_line() +
     geom_linerange(aes = aes(x = hpdMm / 2.0, yMin = 0.0, yMax = 0.75), color = "red") +
     annotate(texts, left = 0.60, bottom = 0.2) +
     xlab("Radius [mm]") + ylab("Encircled Energy Function (EEF)") +
     ggtitle(title) +
     #ggshow(outfile.replace(".pdf", "_hpd_via_eef_50.pdf"))
+    thL(fWidth = FWIDTH, width = Width) +
     ggsave(outfile.replace(".pdf", "_hpd_via_eef_50.pdf"))
 
-  ggplot(df.filter(f{`EEF` <= 0.999}), aes("Diameter [ArcSecond]", "EEF")) +
+  ggplot(dfF, aes("Diameter [ArcSecond]", "EEF")) +
     geom_line() +
     geom_linerange(aes = aes(x = hpdArc, yMin = 0.0, yMax = 0.75), color = "red") +
     annotate(texts, left = 0.60, bottom = 0.2) +
     ylab("Encircled Energy Function (EEF)") +
     ggtitle(title) +
     #ggshow(outfile.replace(".pdf", "_hpd_via_eef_50.pdf"))
+    thL(fWidth = FWIDTH, width = Width) +
     ggsave(outfile.replace(".pdf", "_diameter_arcsec_hpd_via_eef_50.pdf"))
 
   #block Complicated:
@@ -181,6 +229,7 @@ proc plotHPD(df: DataFrame, xrange: float, title, outfile: string, verbose: bool
     ggtitle(&"{title}, HPD plot for axis y") +
     minorGridLines() +
     xlim(-xrange, xrange) +
+    thL(fWidth = FWIDTH, width = Width) +
     ggsave(outfile.replace(".pdf", "_hpd_y.pdf"))
   ggplot(ySum, aes("x [mm]", "sum(z)")) +
     geom_line() +
@@ -190,6 +239,7 @@ proc plotHPD(df: DataFrame, xrange: float, title, outfile: string, verbose: bool
     ggtitle(&"{title}, HPD plot for axis x") +
     minorGridLines() +
     xlim(-xrange, xrange) +
+    thL(fWidth = FWIDTH, width = Width) +
     ggsave(outfile.replace(".pdf", "_hpd_x.pdf"))
 
 proc main(fname, dtype, outfile: string,
