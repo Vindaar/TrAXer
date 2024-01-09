@@ -8,6 +8,13 @@ type
     energyMin*: float
     energyMax*: float
 
+  ChameleonFluxData* = object
+    diffFlux*: seq[float]
+    tachocline*: float
+    Δ*: float
+    energyMin*: float
+    energyMax*: float
+
 const
   r_sun = 696_342_000_000.0 # .km.to(mm).float # SOHO mission 2003 & 2006
   hbar = 6.582119514e-25 # in GeV * s
@@ -86,6 +93,28 @@ proc getFluxRadiusCDF*(solarModelFile: string): FluxData =
                     radii: radii,
                     energyMin: energies.min,
                     energyMax: energies.max)
+
+import numericalnim / interpolate
+import unchained
+defUnit(keV⁻¹•mm⁻²•h⁻¹)
+defUnit(keV⁻¹•cm⁻²•s⁻¹)
+proc getChameleonFluxData*(chameleonFile: string): ChameleonFluxData =
+  # 1. parse the flux TSV file
+  let df = readCsv(chameleonFile, sep = '\t', header = "#") # flux at β_m = β^sun_m = 10^10.81
+    .mutate(f{float: "Flux [keV⁻¹•cm⁻²•s⁻¹]" ~ (idx("I[/16mm2/hour/keV]").keV⁻¹•mm⁻²•h⁻¹ / 16.0).to(keV⁻¹•cm⁻²•s⁻¹).float},
+            f{float: "Energy [keV]" ~ `energy` / 1000.0})
+  # 2. extend the flux to the energy range we use for the `Spectrum` (only goes to 2 keV)
+  let interp = newLinear1D(df["Energy [keV]", float].toSeq1D,
+                           df["Flux [keV⁻¹•cm⁻²•s⁻¹]", float].toSeq1D)
+  let Es = linspace(0.0, 15.0, 1000)
+  var flux = newSeq[float](Es.len)
+  for i, E in Es:
+    flux[i] = interp.eval(E, extrap = Constant, extrapValue = 0.0)
+  result = ChameleonFluxData(diffFlux: flux,
+                             tachocline: 0.7,
+                             Δ: 0.02,
+                             energyMin: Es.min,
+                             energyMax: Es.max)
 
 import xrayAttenuation
 
