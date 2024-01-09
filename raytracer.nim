@@ -1111,7 +1111,8 @@ proc lightSource(tel: Telescope, magnet: Magnet, magnetPos: float, cfg: Config):
   of skXrayFinger: # place target at the telescope side of the magnet
     result.add target(tel, magnet, cfg.visibleTarget, atTelSideMagnet = true, targetRadius = cfg.targetRadius)
   of skSun: # place target at entrance side of the magnet
-    result.add target(tel, magnet, cfg.visibleTarget, atTelSideMagnet = true, targetRadius = cfg.targetRadius)
+    let atTelSide = cfg.ignoreMagnet # if we ignore magnet, place it on the side of the telescope
+    result.add target(tel, magnet, cfg.visibleTarget, atTelSideMagnet = atTelSide, targetRadius = cfg.targetRadius)
   of skParallelXrayFinger: discard # do not place a target
 
 proc magnetBore(magnet: Magnet, magnetPos: float): Hittable[RGBSpectrum] =
