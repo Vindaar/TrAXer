@@ -841,7 +841,7 @@ proc getSources*[S: SomeSpectrum](h: var HittablesList[S], delete: bool): Hittab
   ## Returns all light sources from the given list as a list itself.
   ## These are removed from the input.
   {.cast(gcsafe).}:
-    result = getHittablesOfKind(h, {mkDiffuseLight, mkLaser, mkSolarEmission})
+    result = getHittablesOfKind(h, {mkDiffuseLight, mkLaser, mkSolarAxionEmission, mkSolarChameleonEmission})
     if delete:
       for x in result:
         h.delete(x)
@@ -864,14 +864,31 @@ proc getRandomPointFromSolarModel(radius: float,
   let p = rnd.randomInUnitSphere() * r
   result = point(p)
 
+proc getRandomPointFromChameleonSolarModel(radiusSun: float,
+                                           tachocline: float,
+                                           Δ: float,
+                                           rnd: var Rand): Point =
+  ## This function gives the coordinates of a random point in the sun
+  ## somewhere within `Δradius` around the solar `tachocline`.
+  let pUnit = rnd.randomUnitVector()
+  # https://math.stackexchange.com/a/1113326 better than rejection sampling for thin shells like ours
+  template cube(x): untyped = x*x*x
+  let T = rnd.rand(cube(tachocline - Δ) .. cube(tachocline + Δ))
+  let R = pow(T, 1.0/3.0)
+  result = point(pUnit * R * radiusSun)
+
 proc samplePoint*[S: SomeSpectrum](h: Hittable[S], rnd: var Rand): Point {.gcsafe.}
 proc samplePoint*(s: Sphere, rnd: var Rand, mat: Material): Point {.gcsafe.} =
   ## Samples a random point on the sphere surface
   case mat.kind
-  of mkSolarEmission:
+  of mkSolarAxionEmission:
     ## Use the given emission properties of the solar model
-    let m = mat.mSolarEmission
+    let m = mat.mSolarAxionEmission
     result = getRandomPointFromSolarModel(s.radius, m.fluxRadiusCDF, m.radii, rnd)
+  of mkSolarChameleonEmission:
+    ## Sample within `Δradius` around `radius`
+    let m = mat.mSolarChameleonEmission
+    result = getRandomPointFromChameleonSolarModel(s.radius, m.radius, m.Δradius, rnd)
   else:
     ## Sample uniformly from the sphere
     let p = rnd.randomInUnitSphere()

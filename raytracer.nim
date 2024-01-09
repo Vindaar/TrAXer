@@ -35,6 +35,7 @@ type
     usePerfectMirror: bool
     sourceKind: SourceKind
     solarModelFile: string
+    chameleonFile: string # for chameleon images, hand this argument
     energyMin: float
     energyMax: float
     rayAt = 1.0
@@ -73,6 +74,7 @@ var Tracing = ttCamera
 
 proc initConfig(visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: SourceKind,
                 solarModelFile: string,
+                chameleonFile: string,
                 energyMin, energyMax: float,
                 rayAt: float, setupRotation, telescopeRotation, windowRotation: Degree, windowZOffset: float,
                 ignoreWindow: bool,
@@ -95,6 +97,7 @@ proc initConfig(visibleTarget, gridLines, usePerfectMirror: bool, sourceKind: So
                   usePerfectMirror: usePerfectMirror,
                   sourceKind: sourceKind,
                   solarModelFile: solarModelFile,
+                  chameleonFile: chameleonFile,
                   energyMin: energyMin,
                   energyMax: energyMax,
                   rayAt: rayAt,
@@ -380,7 +383,7 @@ proc sampleRay[S: SomeSpectrum](rnd: var Rand, sources, targets: HittablesList[S
   of mkLaser: # lasers just sample along the normal of the material
     let dir = vec3(0.0, 0.0, -1.0) ## XXX: make this the normal surface!
     result = (initRay(p, dir, rtLight), spectrum)
-  of mkDiffuseLight, mkSolarEmission: # diffuse light need a target
+  of mkDiffuseLight, mkSolarAxionEmission, mkSolarChameleonEmission: # diffuse light need a target
     let numT = targets.len
     if numT == 0:
       raise newException(ValueError, "There must be at least one target for diffuse lights.")
@@ -1016,25 +1019,35 @@ proc earth(): Hittable[RGBSpectrum] =
   result = translate(point(0, -EarthR - 5000, 0), toHittable(Sphere(radius: EarthR), groundMaterial))
 
 import fluxCdf
-proc sun(solarModelFile: string): Hittable[XraySpectrum] =
+proc sun(solarModelFile, chameleonFile: string): Hittable[XraySpectrum] =
   ## Adds the Sun
   let sunColor = color(1.0, 1.0, 0.5)
-  let sunMaterial = if solarModelFile.len == 0:
-                      toSpectrum(initMaterial(initDiffuseLight(sunColor)), XraySpectrum)
-                    else:
+  let sunMaterial = if solarModelFile.len > 0:
                       let fluxData = getFluxRadiusCDF(solarModelFile)
                       initMaterial(
-                        initSolarEmission(sunColor,
-                                          fluxData.fRCdf,
-                                          fluxData.diffFluxR,
-                                          fluxData.radii,
-                                          fluxData.energyMin, fluxData.energyMax
+                        initSolarAxionEmission(sunColor,
+                                               fluxData.fRCdf,
+                                               fluxData.diffFluxR,
+                                               fluxData.radii,
+                                               fluxData.energyMin, fluxData.energyMax
                         )
                       )
+                    elif chameleonFile.len > 0:
+                      let fluxData = getChameleonFluxData(chameleonFile)
+                      initMaterial(
+                        initSolarChameleonEmission(sunColor,
+                                                   fluxData.diffFlux,
+                                                   fluxData.tachocline,
+                                                   fluxData.Δ,
+                                                   fluxData.energyMin, fluxData.energyMax
+                        )
+                      )
+                    else:
+                      toSpectrum(initMaterial(initDiffuseLight(sunColor)), XraySpectrum)
 
   const AU = 149_597_870_700_000.0 # by definition since 2012
   var SunR = 696_342_000_000.0 # Solar radius SOHO 2003 & 2006
-  if solarModelFile.len == 0:
+  if solarModelFile.len == 0 and chameleonFile.len == 0:
     ## DTU PhD mentions 3 arcmin source. tan(3' / 2) * 1 AU = 0.0937389
     SunR *= 0.0937389 #0.20 # only inner 20% contribute, i.e. make the sphere smaller for diffuse light
   ## XXX: in principle need to apply correct x AU distance here if `solarModelFile` supplied!
@@ -1071,7 +1084,7 @@ proc xrayFinger(tel: Telescope, magnet: Magnet, magnetPos: float, cfg: Config): 
 
 proc source(tel: Telescope, magnet: Magnet, magnetPos: float, cfg: Config): Hittable[XraySpectrum] =
   case cfg.sourceKind
-  of skSun: result = sun(cfg.solarModelFile)
+  of skSun: result = sun(cfg.solarModelFile, cfg.chameleonFile)
   of skXrayFinger, skParallelXrayFinger: result = xrayFinger(tel, magnet, magnetPos, cfg)
 
 proc target(tel: Telescope, magnet: Magnet,
@@ -1098,7 +1111,7 @@ proc lightSource(tel: Telescope, magnet: Magnet, magnetPos: float, cfg: Config):
   of skXrayFinger: # place target at the telescope side of the magnet
     result.add target(tel, magnet, cfg.visibleTarget, atTelSideMagnet = true, targetRadius = cfg.targetRadius)
   of skSun: # place target at entrance side of the magnet
-    result.add target(tel, magnet, cfg.visibleTarget, atTelSideMagnet = false, targetRadius = cfg.targetRadius)
+    result.add target(tel, magnet, cfg.visibleTarget, atTelSideMagnet = true, targetRadius = cfg.targetRadius)
   of skParallelXrayFinger: discard # do not place a target
 
 proc magnetBore(magnet: Magnet, magnetPos: float): Hittable[RGBSpectrum] =
@@ -1549,7 +1562,7 @@ proc sceneLLNLTwice(rnd: var Rand, cfg: Config): GenericHittablesList =
                                                            ## so focal spot is on y = 0
   var telMag = initGenericHittables()
   case cfg.sourceKind
-  of skSun: objs.add sun(cfg.solarModelFile) ## Only a single sun in center x/y! Hence add to `objs` so not duplicated
+  of skSun: objs.add sun(cfg.solarModelFile, cfg.chameleonFile) ## Only a single sun in center x/y! Hence add to `objs` so not duplicated
   of skXrayFinger, skParallelXrayFinger:
     telMag.add xrayFinger(llnl, magnet, magnetPos, cfg)
   # Need two targets in both source cases
@@ -1628,6 +1641,7 @@ proc main(width = 600,
           usePerfectMirror = true,
           sourceKind = skSun,
           solarModelFile = "",
+          chameleonFile = "",
           nJobs = 16,
           rayAt = 1.0,
           setupRotation = 90.0.°,
@@ -1667,7 +1681,7 @@ proc main(width = 600,
   # determine the correct energy ranges
   let (energyMin, energyMax) = calcEnergyRange(energyMin, energyMax, energy)
 
-  let cfg = initConfig(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile,
+  let cfg = initConfig(visibleTarget, gridLines, usePerfectMirror, sourceKind, solarModelFile, chameleonFile,
                        energyMin, energyMax,
                        rayAt,
                        setupRotation, telescopeRotation, windowRotation, windowZOffset, ignoreWindow,

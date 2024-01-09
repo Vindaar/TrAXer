@@ -6,14 +6,15 @@ import sensorBuf
 
 type
   MaterialKind* = enum
-    mkLambertian, mkMetal, mkDielectric, mkDiffuseLight, mkSolarEmission, mkLaser, mkImageSensor, mkLightTarget, mkXrayMatter
+    mkLambertian, mkMetal, mkDielectric, mkDiffuseLight, mkSolarAxionEmission, mkSolarChameleonEmission, mkLaser, mkImageSensor, mkLightTarget, mkXrayMatter
   Material*[S: SomeSpectrum] = object
     case kind*: MaterialKind
     of mkLambertian: mLambertian*: Lambertian[S]
     of mkMetal: mMetal*: Metal[S]
     of mkDielectric: mDielectric*: Dielectric[S]
     of mkDiffuseLight: mDiffuseLight*: DiffuseLight[S]
-    of mkSolarEmission: mSolarEmission*: SolarEmission[S]
+    of mkSolarAxionEmission: mSolarAxionEmission*: SolarAxionEmission[S]
+    of mkSolarChameleonEmission: mSolarChameleonEmission*: SolarChameleonEmission[S]
     of mkLaser: mLaser*: Laser[S]
     of mkImageSensor: mImageSensor*: ImageSensor[S]
     of mkLightTarget: mLightTarget*: LightTarget[S]
@@ -41,11 +42,17 @@ type
   DiffuseLight*[S: SomeSpectrum] = object
     emit*: Texture[S]
 
-  SolarEmission*[S: SomeSpectrum] = object
+  SolarAxionEmission*[S: SomeSpectrum] = object
     emit*: Texture[S] ## The color used for the regular light source
     fluxRadiusCDF*: seq[float] ## The relative emission for each radius as a CDF
     diffFluxR*: seq[S] ## The differential flux at each radius as a `Spectrum`.
     radii*: seq[float] ## The associated radii
+
+  SolarChameleonEmission*[S: SomeSpectrum] = object
+    emit*: Texture[S] ## The color used for the regular light source
+    diffFlux*: S ## The differential flux as a `Spectrum`
+    radius*: float    ## The radius at the solar tachocline (0.7 solar radii by default)
+    Δradius*: float   ## Range in which to vary around the radius
 
   ## While the type currently does not actually use the generic, we keep it around to not lose the information
   SensorKind* = enum sCount, sSum
@@ -88,7 +95,7 @@ type
     #refl*: AngleInterpolator[S] ## interpolate energy & angle for reflectivity
     #trans*: AngleInterpolator[S] ## interpolate energy & angle for transmissivity
 
-  AnyMaterial* = Lambertian | Metal | Dielectric | DiffuseLight | Laser | SolarEmission | Dielectric | ImageSensor | LightTarget | XrayMatter
+  AnyMaterial* = Lambertian | Metal | Dielectric | DiffuseLight | Laser | SolarAxionEmission | SolarChameleonEmission | Dielectric | ImageSensor | LightTarget | XrayMatter
 
   ## Leave this here or not?
   HitRecord*[S: SomeSpectrum] = object
@@ -147,26 +154,40 @@ proc value*[S: SomeSpectrum](s: Texture[S], u, v: float, p: Point): S {.gcsafe.}
 proc initDiffuseLight*(a: Color): DiffuseLight[RGBSpectrum] =
   result = DiffuseLight[RGBSpectrum](emit: toTexture(a))
 
-proc initSolarEmission*(a: Color,
-                        fluxRadiusCDF: seq[float], # CDF of entire diff flux per radius
-                        diffFluxR: seq[seq[float]], # differential flux
-                        radii: seq[float], # associated radii
-                        energyMin, energyMax: float
-                       ): SolarEmission[XraySpectrum] =
+proc initSolarAxionEmission*(a: Color,
+                             fluxRadiusCDF: seq[float], # CDF of entire diff flux per radius
+                             diffFluxR: seq[seq[float]], # differential flux
+                             radii: seq[float], # associated radii
+                             energyMin, energyMax: float
+                            ): SolarAxionEmission[XraySpectrum] =
+  ## XXX: Make the code actually use `energyMin, energyMax` as those are now used for the reflecitvity
+  ## Until that is done the solar emission won't be correct for any energies other than default!
+
   # convert each differential flux to an `XraySpectrum`
   var diffFluxRS = newSeq[XraySpectrum](diffFluxR.len)
   doAssert fluxRadiusCDF.len == radii.len, "Need one radius for each flux CDF entry."
   doAssert diffFluxR.len == radii.len, "Need one radius for each radial differential flux."
   for i in 0 ..< radii.len:
     diffFluxRS[i] = initXraySpectrum(diffFluxR[i], energyMin, energyMax)
+  result = SolarAxionEmission[XraySpectrum](emit: toSpectrum(toTexture(a), XraySpectrum),
+                                            fluxRadiusCDF: fluxRadiusCDF,
+                                            diffFluxR: diffFluxRS,
+                                            radii: radii)
 
-  result = SolarEmission[XraySpectrum](emit: toSpectrum(toTexture(a), XraySpectrum),
-                                       fluxRadiusCDF: fluxRadiusCDF,
-                                       diffFluxR: diffFluxRS,
-                                       radii: radii)
-
-#proc initSolarEmission*(a: Color, fluxRadiusCDF: seq[float]): SolarEmission[XraySpectrum] =
-#  result = SolarEmission(emit: toTexture(a), fluxRadiusCDF: fluxRadiusCDF)
+proc initSolarChameleonEmission*(a: Color,
+                                 diffFlux: seq[float],
+                                 radius: float,
+                                 Δradius: float,
+                                 energyMin, energyMax: float
+                       ): SolarChameleonEmission[XraySpectrum] =
+  # convert spectrum to an XraySpectrum.
+  let fluxSpectrum = initXraySpectrum(diffFlux, energyMin, energyMax)
+  result = SolarChameleonEmission[XraySpectrum](
+    emit: toSpectrum(toTexture(a), XraySpectrum),
+    diffFlux: fluxSpectrum,
+    radius: radius,
+    Δradius: Δradius
+  )
 
 proc initLaser*(a: Color): Laser[RGBSpectrum] =
   result = Laser[RGBSpectrum](emit: toTexture(a))
@@ -193,15 +214,16 @@ proc initImageSensor*(width, height: int, kind: SensorKind = sCount): ImageSenso
 proc initLightTarget*(a: Color, visible: bool): LightTarget[RGBSpectrum] =
   result = LightTarget[RGBSpectrum](albedo: toTexture(a), visible: visible)
 
-proc toMaterial*[S: SomeSpectrum](m: Lambertian[S]): Material[S]    = Material[S](kind: mkLambertian, mLambertian: m)
-proc toMaterial*[S: SomeSpectrum](m: Metal[S]): Material[S]         = Material[S](kind: mkMetal, mMetal: m)
-proc toMaterial*[S: SomeSpectrum](m: Dielectric[S]): Material[S]    = Material[S](kind: mkDielectric, mDielectric: m)
-proc toMaterial*[S: SomeSpectrum](m: XrayMatter[S]): Material[S]    = Material[S](kind: mkXrayMatter, mXrayMatter: m)
-proc toMaterial*[S: SomeSpectrum](m: DiffuseLight[S]): Material[S]  = Material[S](kind: mkDiffuseLight, mDiffuseLight: m)
-proc toMaterial*[S: SomeSpectrum](m: SolarEmission[S]): Material[S] = Material[S](kind: mkSolarEmission, mSolarEmission: m)
-proc toMaterial*[S: SomeSpectrum](m: Laser[S]): Material[S]         = Material[S](kind: mkLaser, mLaser: m)
-proc toMaterial*[S: SomeSpectrum](m: ImageSensor[S]): Material[S]   = Material[S](kind: mkImageSensor, mImageSensor: m)
-proc toMaterial*[S: SomeSpectrum](m: LightTarget[S]): Material[S]   = Material[S](kind: mkLightTarget, mLightTarget: m)
+proc toMaterial*[S: SomeSpectrum](m: Lambertian[S]): Material[S]             = Material[S](kind: mkLambertian, mLambertian: m)
+proc toMaterial*[S: SomeSpectrum](m: Metal[S]): Material[S]                  = Material[S](kind: mkMetal, mMetal: m)
+proc toMaterial*[S: SomeSpectrum](m: Dielectric[S]): Material[S]             = Material[S](kind: mkDielectric, mDielectric: m)
+proc toMaterial*[S: SomeSpectrum](m: XrayMatter[S]): Material[S]             = Material[S](kind: mkXrayMatter, mXrayMatter: m)
+proc toMaterial*[S: SomeSpectrum](m: DiffuseLight[S]): Material[S]           = Material[S](kind: mkDiffuseLight, mDiffuseLight: m)
+proc toMaterial*[S: SomeSpectrum](m: SolarAxionEmission[S]): Material[S]     = Material[S](kind: mkSolarAxionEmission, mSolarAxionEmission: m)
+proc toMaterial*[S: SomeSpectrum](m: SolarChameleonEmission[S]): Material[S] = Material[S](kind: mkSolarChameleonEmission, mSolarChameleonEmission: m)
+proc toMaterial*[S: SomeSpectrum](m: Laser[S]): Material[S]                  = Material[S](kind: mkLaser, mLaser: m)
+proc toMaterial*[S: SomeSpectrum](m: ImageSensor[S]): Material[S]            = Material[S](kind: mkImageSensor, mImageSensor: m)
+proc toMaterial*[S: SomeSpectrum](m: LightTarget[S]): Material[S]            = Material[S](kind: mkLightTarget, mLightTarget: m)
 template initMaterial*[T: AnyMaterial](m: T): Material              = m.toMaterial()
 
 template lambertTargetBody(): untyped {.dirty.} =
@@ -345,7 +367,7 @@ type
   NonEmittingMaterials* = Lambertian | Metal | Dielectric | LightTarget | XrayMatter
   EmittingMaterials* = DiffuseLight | Laser | ImageSensor
 
-proc scatter*[T: DiffuseLight | Laser | SolarEmission; S: SomeSpectrum](
+proc scatter*[T: DiffuseLight | Laser | SolarAxionEmission | SolarChameleonEmission; S: SomeSpectrum](
   m: T,
   rnd: var Rand,
   r_in: Ray, rec: HitRecord[S],
@@ -376,23 +398,25 @@ proc scatter*[S: SomeSpectrum](
   attenuation: var S, scattered: var Ray
                              ): bool {.gcsafe.} =
   case m.kind
-  of mkLambertian:    result = m.mLambertian.scatter(rnd, r_in, rec, attenuation, scattered)
-  of mkMetal:         result = m.mMetal.scatter(rnd, r_in, rec, attenuation, scattered)
-  of mkDielectric:    result = m.mDielectric.scatter(rnd, r_in, rec, attenuation, scattered)
-  of mkXrayMatter:    result = m.mXrayMatter.scatter(rnd, r_in, rec, attenuation, scattered)
-  of mkDiffuseLight:  result = m.mDiffuseLight.scatter(rnd, r_in, rec, attenuation, scattered)
-  of mkSolarEmission: result = m.mSolarEmission.scatter(rnd, r_in, rec, attenuation, scattered)
-  of mkLaser:         result = m.mLaser.scatter(rnd, r_in, rec, attenuation, scattered)
-  of mkImageSensor:   result = m.mImageSensor.scatter(rnd, r_in, rec, attenuation, scattered)
-  of mkLightTarget:   result = m.mLightTarget.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkLambertian:             result = m.mLambertian.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkMetal:                  result = m.mMetal.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkDielectric:             result = m.mDielectric.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkXrayMatter:             result = m.mXrayMatter.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkDiffuseLight:           result = m.mDiffuseLight.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkSolarAxionEmission:     result = m.mSolarAxionEmission.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkSolarChameleonEmission: result = m.mSolarChameleonEmission.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkLaser:                  result = m.mLaser.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkImageSensor:            result = m.mImageSensor.scatter(rnd, r_in, rec, attenuation, scattered)
+  of mkLightTarget:            result = m.mLightTarget.scatter(rnd, r_in, rec, attenuation, scattered)
 
 proc emit*[S: SomeSpectrum](m: Lambertian[S] | Metal[S] | Dielectric[S] | LightTarget[S] | XrayMatter[S],
                             u, v: float, p: Point): S =
   ## Materials that don't emit just return black!
   result = toSpectrum(color(0, 0, 0), S)
 
-proc emit*[S: SomeSpectrum](m: DiffuseLight[S] | Laser[S] | SolarEmission[S], u, v: float, p: Point): S =
-  ##XXX: emission of `SolarEmission`
+proc emit*[S: SomeSpectrum](m: DiffuseLight[S] | Laser[S] | SolarAxionEmission[S] | SolarChameleonEmission[S],
+                            u, v: float, p: Point): S =
+  ##XXX: emission of `SolarAxionEmission`
   ## At the radius at which we sampled from: extract the entire flux spectrum found at that
   ## radius and return it.
   result = m.emit.value(u, v, p)
@@ -416,22 +440,26 @@ proc emit*[S: SomeSpectrum](m: ImageSensor[S], u, v: float, p: Point): S =
 
 proc emit*[S: SomeSpectrum](m: Material[S], u, v: float, p: Point): S =
   case m.kind
-  of mkLambertian:    result = m.mLambertian.emit(u, v, p)
-  of mkMetal:         result = m.mMetal.emit(u, v, p)
-  of mkDielectric:    result = m.mDielectric.emit(u, v, p)
-  of mkXrayMatter:    result = m.mXrayMatter.emit(u, v, p)
-  of mkDiffuseLight:  result = m.mDiffuseLight.emit(u, v, p)
-  of mkSolarEmission: result = m.mSolarEmission.emit(u, v, p)
-  of mkLaser:         result = m.mLaser.emit(u, v, p)
-  of mkImageSensor:   result = m.mImageSensor.emit(u, v, p)
-  of mkLightTarget:   result = m.mLightTarget.emit(u, v, p)
+  of mkLambertian:             result = m.mLambertian.emit(u, v, p)
+  of mkMetal:                  result = m.mMetal.emit(u, v, p)
+  of mkDielectric:             result = m.mDielectric.emit(u, v, p)
+  of mkXrayMatter:             result = m.mXrayMatter.emit(u, v, p)
+  of mkDiffuseLight:           result = m.mDiffuseLight.emit(u, v, p)
+  of mkSolarAxionEmission:     result = m.mSolarAxionEmission.emit(u, v, p)
+  of mkSolarChameleonEmission: result = m.mSolarChameleonEmission.emit(u, v, p)
+  of mkLaser:                  result = m.mLaser.emit(u, v, p)
+  of mkImageSensor:            result = m.mImageSensor.emit(u, v, p)
+  of mkLightTarget:            result = m.mLightTarget.emit(u, v, p)
 
 from std/algorithm import lowerBound
-proc emitAxion*[S: SomeSpectrum](m: DiffuseLight[S] | Laser[S] | SolarEmission[S], p: Point, radius: float): S =
+proc emitAxion*[S: SomeSpectrum](m: DiffuseLight[S] | Laser[S] | SolarAxionEmission[S] | SolarChameleonEmission[S],
+                                 p: Point, radius: float): S =
   ## At the radius at which we sampled from: extract the entire flux spectrum found at that
   ## radius and return it.
   when typeof(m) is DiffuseLight[S] | Laser[S]:
     result = m.emit.value(0.5, 0.5, p) # in this case just emit the color at an arbitrary point
+  elif typeof(m) is SolarChameleonEmission:
+    result = m.diffFlux # just emit the entire spectrum! No radial dependence
   else:
     # use the solar emission data!
     let
@@ -443,15 +471,16 @@ proc emitAxion*[S: SomeSpectrum](m: DiffuseLight[S] | Laser[S] | SolarEmission[S
 
 proc emitAxion*[S: SomeSpectrum](m: Material[S], p: Point, radius: float): S =
   case m.kind
-  #of mkLambertian:    result = m.mLambertian.emitAxion(p, radius)
-  #of mkMetal:         result = m.mMetal.emitAxion(p, radius)
-  #of mkDielectric:    result = m.mDielectric.emitAxion(p, radius)
-  #of mkXrayMatter:    result = m.mXrayMatter.emitAxion(p, radius)
-  of mkDiffuseLight:  result = m.mDiffuseLight.emitAxion(p, radius)
-  of mkSolarEmission: result = m.mSolarEmission.emitAxion(p, radius)
-  of mkLaser:         result = m.mLaser.emitAxion(p, radius)
-  #of mkImageSensor:   result = m.mImageSensor.emitAxion(p, radius)
-  #of mkLightTarget:   result = m.mLightTarget.emitAxion(p, radius)
+  #of mkLambertian:            result = m.mLambertian.emitAxion(p, radius)
+  #of mkMetal:                 result = m.mMetal.emitAxion(p, radius)
+  #of mkDielectric:            result = m.mDielectric.emitAxion(p, radius)
+  #of mkXrayMatter:            result = m.mXrayMatter.emitAxion(p, radius)
+  of mkDiffuseLight:           result = m.mDiffuseLight.emitAxion(p, radius)
+  of mkSolarAxionEmission:     result = m.mSolarAxionEmission.emitAxion(p, radius)
+  of mkSolarChameleonEmission: result = m.mSolarChameleonEmission.emitAxion(p, radius)
+  of mkLaser:                  result = m.mLaser.emitAxion(p, radius)
+  #of mkImageSensor:           result = m.mImageSensor.emitAxion(p, radius)
+  #of mkLightTarget:           result = m.mLightTarget.emitAxion(p, radius)
   else: doAssert false, "not supported " & $m.kind
 
 
@@ -472,8 +501,12 @@ proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](m: XrayMatter[S], _: typedesc
                          refl: m.refl, trans: m.trans)
 proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](m: ImageSensor[S], _: typedesc[T]): ImageSensor[T] =
   result = ImageSensor[T](sensor: m.sensor)
-proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](m: SolarEmission[S], _: typedesc[T]): SolarEmission[T] =
-  result = SolarEmission[T](emit: toSpectrum(m.emit, T), fluxRadiusCDF: m.fluxRadiusCDF)
+proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](m: SolarAxionEmission[S], _: typedesc[T]): SolarAxionEmission[T] =
+  result = SolarAxionEmission[T](emit: toSpectrum(m.emit, T), fluxRadiusCDF: m.fluxRadiusCDF)
+proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](m: SolarChameleonEmission[S], _: typedesc[T]): SolarChameleonEmission[T] =
+  result = SolarChameleonEmission[T](emit: toSpectrum(m.emit, T),
+                                     diffFlux: toSpectrum(m.diffFlux, T),
+                                     radius: m.radius, Δradius: m.Δradius)
 proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](m: LightTarget[S], _: typedesc[T]): LightTarget[T] =
   result = LightTarget[T](visible: m.visible, albedo: toSpectrum(m.albedo, T))
 
@@ -482,12 +515,13 @@ proc toSpectrum*[S: SomeSpectrum; T: SomeSpectrum](m: Material[S], _: typedesc[T
   when S is T: result = m
   else:
     case m.kind
-    of mkLambertian:    result = toMaterial m.mLambertian.toSpectrum(T)
-    of mkMetal:         result = toMaterial m.mMetal.toSpectrum(T)
-    of mkDielectric:    result = toMaterial m.mDielectric.toSpectrum(T)
-    of mkXrayMatter:    result = toMaterial m.mXrayMatter.toSpectrum(T)
-    of mkDiffuseLight:  result = toMaterial m.mDiffuseLight.toSpectrum(T)
-    of mkSolarEmission: result = toMaterial m.mSolarEmission.toSpectrum(T)
-    of mkLaser:         result = toMaterial m.mLaser.toSpectrum(T)
-    of mkImageSensor:   result = toMaterial m.mImageSensor.toSpectrum(T)
-    of mkLightTarget:   result = toMaterial m.mLightTarget.toSpectrum(T)
+    of mkLambertian:             result = toMaterial m.mLambertian.toSpectrum(T)
+    of mkMetal:                  result = toMaterial m.mMetal.toSpectrum(T)
+    of mkDielectric:             result = toMaterial m.mDielectric.toSpectrum(T)
+    of mkXrayMatter:             result = toMaterial m.mXrayMatter.toSpectrum(T)
+    of mkDiffuseLight:           result = toMaterial m.mDiffuseLight.toSpectrum(T)
+    of mkSolarAxionEmission:     result = toMaterial m.mSolarAxionEmission.toSpectrum(T)
+    of mkSolarChameleonEmission: result = toMaterial m.mSolarChameleonEmission.toSpectrum(T)
+    of mkLaser:                  result = toMaterial m.mLaser.toSpectrum(T)
+    of mkImageSensor:            result = toMaterial m.mImageSensor.toSpectrum(T)
+    of mkLightTarget:            result = toMaterial m.mLightTarget.toSpectrum(T)
